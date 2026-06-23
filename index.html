@@ -139,37 +139,60 @@
       </div>
     </section>
 
-    <!-- ===== メール入力（新規・未連携） ===== -->
-    <section id="screen-email" class="screen">
+    <!-- ===== 氏名入力（未連携） ===== -->
+    <section id="screen-name" class="screen">
       <div class="glass rounded-3xl shadow-card shadow-glow p-6 mt-4 animate-fade-up">
         <div class="text-center mb-6">
           <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-100 to-uo-100 mb-4">
-            <span class="text-3xl">📧</span>
+            <span class="text-3xl">🙋</span>
           </div>
           <h2 class="text-xl font-bold text-slate-800 mb-2">ようこそ！</h2>
           <p class="text-sm text-slate-500 leading-relaxed">
-            受付と名簿作成のため、<br />メールアドレスを入力してください
+            お申込み時の<strong>氏名</strong>を入力してください
           </p>
         </div>
 
-        <form id="form-email" class="space-y-4">
+        <form id="form-name" class="space-y-4">
           <div>
-            <label for="input-email" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-              メールアドレス
+            <label for="input-name" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              氏名
             </label>
             <input
-              id="input-email"
-              type="email"
-              inputmode="email"
-              autocomplete="email"
-              placeholder="example@company.com"
+              id="input-name"
+              type="text"
+              autocomplete="name"
+              placeholder="例：山田太郎"
               required
               class="w-full px-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50
                      text-base text-slate-800 placeholder:text-slate-400
                      focus:border-uo-400 focus:bg-white transition-colors"
             />
+            <p class="text-[11px] text-slate-400 mt-1.5">スペースの有無は自動で判別します</p>
           </div>
-          <button id="btn-email-submit" type="submit"
+
+          <div id="email-confirm-section" class="hidden space-y-2 animate-fade-up">
+            <div class="bg-amber-50 border border-amber-100 rounded-xl p-3">
+              <p class="text-xs text-amber-800 leading-relaxed">
+                同姓同名の方がいらっしゃいます。<br />
+                お申込み時の<strong>メールアドレス</strong>を入力してください。
+              </p>
+            </div>
+            <label for="input-email-confirm" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              メールアドレス（確認用）
+            </label>
+            <input
+              id="input-email-confirm"
+              type="email"
+              inputmode="email"
+              autocomplete="email"
+              placeholder="example@company.com"
+              class="w-full px-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50
+                     text-base text-slate-800 placeholder:text-slate-400
+                     focus:border-uo-400 focus:bg-white transition-colors"
+            />
+          </div>
+
+          <button id="btn-name-submit" type="submit"
             class="w-full py-4 rounded-2xl bg-gradient-to-r from-uo-600 to-uo-500
                    text-white font-bold text-sm shadow-lg shadow-uo-500/25
                    hover:from-uo-700 hover:to-uo-600 active:scale-[0.98] transition-all
@@ -365,6 +388,7 @@
       customer: null,
       editMode: false,
       isSubmitting: false,
+      needsEmailConfirm: false,
     };
 
     // =========================================================================
@@ -475,7 +499,7 @@
           state.customer = lookup.customer;
           showWelcomeScreen();
         } else {
-          showScreen("email");
+          showScreen("name");
         }
       } catch (err) {
         console.error(err);
@@ -505,42 +529,71 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
+    function resetNameForm() {
+      state.needsEmailConfirm = false;
+      $("email-confirm-section").classList.add("hidden");
+      $("input-email-confirm").value = "";
+      $("input-email-confirm").required = false;
+    }
+
+    async function linkParticipantByName(userName, email = "") {
+      return callGasApi("checkin_link_by_name", {
+        line_user_id: state.lineUserId,
+        event_date: CONFIG.EVENT_DATE,
+        user_name: userName,
+        email,
+      });
+    }
+
+    function handleLinkResult(result) {
+      if (result.needsEmailConfirm) {
+        state.needsEmailConfirm = true;
+        $("email-confirm-section").classList.remove("hidden");
+        $("input-email-confirm").required = true;
+        $("input-name").readOnly = true;
+        showToast(result.message || "メールアドレスの確認が必要です");
+        return false;
+      }
+
+      state.customer = result.customer;
+      if (result.alreadyCheckedIn) {
+        showCompleteScreen();
+      } else {
+        showWelcomeScreen();
+      }
+      return true;
+    }
+
     // =========================================================================
     // イベントハンドラ
     // =========================================================================
-    $("form-email").addEventListener("submit", async (e) => {
+    $("form-name").addEventListener("submit", async (e) => {
       e.preventDefault();
       if (state.isSubmitting) return;
 
-      const email = $("input-email").value.trim();
-      if (!email) return;
+      const userName = $("input-name").value.trim();
+      if (!userName) return;
+
+      const email = state.needsEmailConfirm
+        ? $("input-email-confirm").value.trim()
+        : "";
+
+      if (state.needsEmailConfirm && !email) {
+        showToast("メールアドレスを入力してください");
+        return;
+      }
 
       state.isSubmitting = true;
-      setLoading($("btn-email-submit"), true, "次へ進む");
+      setLoading($("btn-name-submit"), true, "次へ進む");
 
       try {
-        const result = await callGasApi("checkin_link_email", {
-          line_user_id: state.lineUserId,
-          event_date: CONFIG.EVENT_DATE,
-          email,
-          display_name: state.displayName,
-        });
-
-        state.customer = result.customer;
-
-        if (result.alreadyCheckedIn) {
-          showCompleteScreen();
-        } else {
-          showWelcomeScreen();
-          if (result.pattern === "pending_name") {
-            showToast("氏名が一致する既存データがあります。スタッフが確認します。");
-          }
-        }
+        const result = await linkParticipantByName(userName, email);
+        handleLinkResult(result);
       } catch (err) {
-        showToast(err.message || "連携に失敗しました");
+        showToast(err.message || "確認に失敗しました");
       } finally {
         state.isSubmitting = false;
-        setLoading($("btn-email-submit"), false, "次へ進む");
+        setLoading($("btn-name-submit"), false, "次へ進む");
       }
     });
 

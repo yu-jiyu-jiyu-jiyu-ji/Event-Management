@@ -78,6 +78,9 @@ function doPost(e) {
       case "checkin_lookup":
         result = handleCheckinLookup_(payload);
         break;
+      case "checkin_link_by_name":
+        result = handleCheckinLinkByName_(payload);
+        break;
       case "checkin_link_email":
         result = handleCheckinLinkEmail_(payload);
         break;
@@ -132,6 +135,9 @@ function doGet(e) {
       case "checkin_lookup":
         result = handleCheckinLookup_(payload);
         break;
+      case "checkin_link_by_name":
+        result = handleCheckinLinkByName_(payload);
+        break;
       case "checkin_link_email":
         result = handleCheckinLinkEmail_(payload);
         break;
@@ -177,7 +183,7 @@ function handleCheckinLookup_(payload) {
     return {
       ok: true,
       found: false,
-      needsEmail: true,
+      needsName: true,
     };
   }
 
@@ -199,7 +205,194 @@ function handleCheckinLookup_(payload) {
 }
 
 /**
- * メールアドレスで名寄せし LINE ID を紐付け
+ * 当日参加者リストから氏名で検索し LINE ID を紐付け
+ * 同姓同名が複数いる場合のみメール確認を要求
+ * @param {Object} payload
+ * @returns {Object}
+ */
+function handleCheckinLinkByName_(payload) {
+  const lineUserId = requireString_(payload.line_user_id, "line_user_id");
+  const eventDate = requireString_(payload.event_date, "event_date");
+  const userName = sanitizeUserName_(payload.user_name);
+  if (!userName) {
+    throw new Error("氏名を入力してください。");
+  }
+
+  const emailInput = String(payload.email || "").trim();
+  const masterSheet = getSheet_(SHEET_MASTER);
+  const eventSheet = getSheet_(SHEET_EVENTS);
+
+  let matches = findEventParticipantsByName_(
+    eventSheet,
+    masterSheet,
+    eventDate,
+    userName,
+  );
+
+  if (matches.length === 0) {
+    throw new Error(
+      "本日の参加者リストに見つかりません。お申込み時の氏名をご確認ください。",
+    );
+  }
+
+  const pendingMatches = matches.filter(
+    (m) => String(m.event.attendance_status) !== "済",
+  );
+  matches = pendingMatches.length > 0 ? pendingMatches : matches;
+
+  if (matches.length > 1 && !emailInput) {
+    return {
+      ok: true,
+      linked: false,
+      needsEmailConfirm: true,
+      matchCount: matches.length,
+      userName,
+      message:
+        "同姓同名の方がいらっしゃいます。お申込み時のメールアドレスを入力してください。",
+    };
+  }
+
+  let selected;
+  if (matches.length === 1) {
+    selected = matches[0];
+  } else {
+    const email = sanitizeEmail_(emailInput);
+    selected = matches.find(
+      (m) => sanitizeEmailSafe_(m.email) === email,
+    );
+    if (!selected) {
+      throw new Error("氏名とメールアドレスの組み合わせが見つかりません。");
+    }
+  }
+
+  return linkCheckinParticipant_(lineUserId, eventDate, selected, userName);
+}
+
+/**
+ * 当日 event_histories から氏名一致の参加者を検索
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} eventSheet
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} masterSheet
+ * @param {string} eventDate
+ * @param {string} userName サニタイズ済み氏名
+ * @returns {Object[]}
+ */
+function findEventParticipantsByName_(eventSheet, masterSheet, eventDate, userName) {
+  const targetName = sanitizeUserName_(userName);
+  const lastRow = eventSheet.getLastRow();
+  const matches = [];
+
+  for (let row = 2; row <= lastRow; row++) {
+    const event = rowToObject_(eventSheet, row);
+    if (String(event.event_date) !== String(eventDate)) {
+      continue;
+    }
+
+    const email = sanitizeEmailSafe_(event.form_email);
+    const customer = email ? findCustomerByEmail_(masterSheet, email) : null;
+    const displayName = getParticipantDisplayName_(event, customer);
+
+    if (displayName !== targetName) {
+      continue;
+    }
+
+    matches.push({
+      event,
+      customer,
+      email: email || (customer ? String(customer.email || "") : ""),
+      displayName: customer
+        ? String(customer.user_name || targetName)
+        : String(event.receipt_name || targetName),
+    });
+  }
+
+  return matches;
+}
+
+/**
+ * 参加者の表示用氏名を取得（スペース除去済みで比較）
+ * @param {Object} event
+ * @param {Object|null} customer
+ * @returns {string}
+ */
+function getParticipantDisplayName_(event, customer) {
+  if (customer && customer.user_name) {
+    return sanitizeUserName_(customer.user_name);
+  }
+  if (event.receipt_name) {
+    return sanitizeUserName_(event.receipt_name);
+  }
+  return "";
+}
+
+/**
+ * 参加者を特定して master / event_histories に LINE ID を紐付け
+ * @param {string} lineUserId
+ * @param {string} eventDate
+ * @param {Object} selected
+ * @param {string} userName
+ * @returns {Object}
+ */
+function linkCheckinParticipant_(lineUserId, eventDate, selected, userName) {
+  const masterSheet = getSheet_(SHEET_MASTER);
+  const eventSheet = getSheet_(SHEET_EVENTS);
+  const email = sanitizeEmail_(selected.email);
+
+  let customer = selected.customer;
+  if (!customer) {
+    customer = findCustomerByEmail_(masterSheet, email);
+  }
+
+  if (!customer) {
+    customer = appendMasterCustomer_(masterSheet, {
+      line_user_id: lineUserId,
+      user_name: userName,
+      company_name: "",
+      position_category: "",
+      position_name: "",
+      email: email,
+      phone_number: "",
+      referrer: "当日受付LIFF",
+      status: CustomerStatus.ACTIVE,
+    });
+  } else {
+    updateMasterFields_(masterSheet, customer._rowIndex, {
+      line_user_id: lineUserId,
+      user_name: userName,
+    });
+    customer = rowToObject_(masterSheet, customer._rowIndex);
+  }
+
+  let eventHistory = selected.event;
+  if (!eventHistory.line_user_id) {
+    updateEventFields_(eventSheet, eventHistory._rowIndex, {
+      line_user_id: lineUserId,
+    });
+    eventHistory = rowToObject_(eventSheet, eventHistory._rowIndex);
+  }
+
+  const lineNotification = sendLineNotification_(
+    buildCheckinLinkNotification_({
+      pattern: MatchPattern.EXISTING_EMAIL,
+      customer,
+      eventDate,
+      email,
+      userName,
+    }),
+  );
+
+  return {
+    ok: true,
+    linked: true,
+    needsEmailConfirm: false,
+    customer: serializeCustomer_(customer),
+    eventHistory: serializeEvent_(eventHistory),
+    alreadyCheckedIn: String(eventHistory.attendance_status) === "済",
+    lineNotification,
+  };
+}
+
+/**
+ * メールアドレスで名寄せし LINE ID を紐付け（レガシー・フォールバック用）
  * @param {Object} payload
  * @returns {Object}
  */
@@ -496,11 +689,10 @@ function serializeEvent_(event) {
  */
 function buildCheckinLinkNotification_(ctx) {
   return [
-    "【うお会】当日受付：メール連携",
+    "【うお会】当日受付：参加者確認",
     "",
-    `パターン: ${getPatternLabel_(ctx.pattern)}`,
     `イベント日: ${ctx.eventDate}`,
-    `氏名: ${ctx.customer.user_name}`,
+    `氏名: ${ctx.userName || ctx.customer.user_name}`,
     `メール: ${ctx.email}`,
     `会社: ${ctx.customer.company_name || "—"}`,
     `status: ${ctx.customer.status}`,
