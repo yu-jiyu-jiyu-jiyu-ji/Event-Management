@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>うおの会 QRコード生成</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <style>
+    body { background: linear-gradient(160deg, #0f172a 0%, #0c4a6e 45%, #082f49 100%); min-height: 100vh; }
+  </style>
+</head>
+<body class="antialiased text-slate-800">
+  <main class="max-w-md mx-auto px-4 py-10">
+    <div class="bg-white rounded-3xl shadow-xl p-6">
+      <div class="text-center mb-6">
+        <p class="text-2xl mb-1">🐟</p>
+        <h1 class="text-xl font-bold text-slate-800">うおの会</h1>
+        <p class="text-sm text-slate-500">当日受付 QRコード生成</p>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label for="event-date" class="block text-xs font-semibold text-slate-500 mb-1.5">イベント日</label>
+          <input id="event-date" type="date"
+            class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-sm focus:border-sky-400 focus:outline-none" />
+          <p class="text-[11px] text-slate-400 mt-1">ゾロ目の開催日を選択してください</p>
+        </div>
+
+        <button id="btn-generate" type="button"
+          class="w-full py-3.5 rounded-2xl bg-sky-600 text-white font-bold text-sm hover:bg-sky-700 transition-colors">
+          QRコードを生成
+        </button>
+      </div>
+
+      <div id="result" class="hidden mt-6 text-center">
+        <canvas id="qr-canvas" class="mx-auto rounded-xl border border-slate-100 shadow-sm"></canvas>
+        <p id="qr-url" class="text-[11px] text-slate-500 mt-3 break-all leading-relaxed"></p>
+        <p id="qr-date-label" class="text-sm font-semibold text-slate-700 mt-2"></p>
+        <div class="flex gap-2 mt-4">
+          <button id="btn-download" type="button"
+            class="flex-1 py-3 rounded-xl bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900">
+            PNG保存
+          </button>
+          <button id="btn-print" type="button"
+            class="flex-1 py-3 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">
+            印刷
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <p class="text-center text-sky-200/60 text-xs mt-6">
+      <a href="/" class="underline">受付アプリに戻る</a>
+    </p>
+  </main>
+
+  <script>
+    const CONFIG = {
+      LIFF_URL: "https://liff.line.me/2010484166-bN2zuFKb",
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function toEventParam(dateStr) {
+      return dateStr.replace(/-/g, "");
+    }
+
+    function formatLabel(dateStr) {
+      const [y, m, d] = dateStr.split("-");
+      return `${y}年${Number(m)}月${Number(d)}日 開催分`;
+    }
+
+    function buildCheckinUrl(eventParam) {
+      return `${CONFIG.LIFF_URL}?event=${eventParam}`;
+    }
+
+    async function generateQr() {
+      const dateValue = $("event-date").value;
+      if (!dateValue) {
+        alert("イベント日を選択してください");
+        return;
+      }
+
+      const eventParam = toEventParam(dateValue);
+      const url = buildCheckinUrl(eventParam);
+      const canvas = $("qr-canvas");
+
+      await QRCode.toCanvas(canvas, url, {
+        width: 280,
+        margin: 2,
+        color: { dark: "#0f172a", light: "#ffffff" },
+      });
+
+      $("qr-url").textContent = url;
+      $("qr-date-label").textContent = formatLabel(dateValue);
+      $("result").classList.remove("hidden");
+    }
+
+    $("btn-generate").addEventListener("click", generateQr);
+
+    $("btn-download").addEventListener("click", () => {
+      const link = document.createElement("a");
+      link.download = `uonokai-checkin-${$("event-date").value}.png`;
+      link.href = $("qr-canvas").toDataURL("image/png");
+      link.click();
+    });
+
+    $("btn-print").addEventListener("click", () => {
+      const win = window.open("", "_blank");
+      const img = $("qr-canvas").toDataURL("image/png");
+      win.document.write(`
+        <html><head><title>うおの会 受付QR</title></head>
+        <body style="text-align:center;font-family:sans-serif;padding:40px">
+          <h1>うおの会 当日受付</h1>
+          <p>${$("qr-date-label").textContent}</p>
+          <img src="${img}" width="300" />
+          <p style="font-size:12px;color:#666">${$("qr-url").textContent}</p>
+        </body></html>
+      `);
+      win.document.close();
+      win.print();
+    });
+
+    // デフォルト: 今日 or URL の event パラメータ
+    const params = new URLSearchParams(location.search);
+    const eventParam = params.get("event");
+    if (eventParam && eventParam.length === 8) {
+      const y = eventParam.slice(0, 4);
+      const m = eventParam.slice(4, 6);
+      const d = eventParam.slice(6, 8);
+      $("event-date").value = `${y}-${m}-${d}`;
+    } else {
+      $("event-date").valueAsDate = new Date();
+    }
+  </script>
+</body>
+</html>

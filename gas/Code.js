@@ -1,5 +1,5 @@
 /**
- * うお会 イベント管理システム — GAS Web API 基盤
+ * うおの会 イベント管理システム — GAS Web API 基盤
  *
  * 【Script Properties に設定する値】
  * - SPREADSHEET_ID          : 対象スプレッドシート ID
@@ -88,7 +88,7 @@ function doPost(e) {
         result = handleCheckinComplete_(payload);
         break;
       case "health":
-        result = { ok: true, message: "うお会 GAS API is running." };
+        result = { ok: true, message: "うおの会 GAS API is running." };
         break;
       default:
         throw new Error(`未対応の action です: ${action}`);
@@ -145,7 +145,7 @@ function doGet(e) {
         result = handleCheckinComplete_(payload);
         break;
       case "health":
-        result = { ok: true, message: "うお会 GAS API is running." };
+        result = { ok: true, message: "うおの会 GAS API is running." };
         break;
       default:
         throw new Error(`GET 未対応の action です: ${action}`);
@@ -177,7 +177,8 @@ function handleCheckinLookup_(payload) {
   const masterSheet = getSheet_(SHEET_MASTER);
   const eventSheet = getSheet_(SHEET_EVENTS);
 
-  const customer = findCustomerByLineId_(masterSheet, lineUserId);
+  const masterIndex = loadMasterIndex_(masterSheet);
+  const customer = masterIndex.byLineId[lineUserId] || null;
 
   if (!customer) {
     return {
@@ -187,7 +188,8 @@ function handleCheckinLookup_(payload) {
     };
   }
 
-  const eventHistory = findEventHistoryForCheckin_(eventSheet, {
+  const eventRows = loadEventRowsForDate_(eventSheet, eventDate);
+  const eventHistory = findEventHistoryForCheckinFromRows_(eventRows, {
     eventDate,
     lineUserId,
     email: customer.email,
@@ -222,10 +224,11 @@ function handleCheckinLinkByName_(payload) {
   const emailInput = String(payload.email || "").trim();
   const masterSheet = getSheet_(SHEET_MASTER);
   const eventSheet = getSheet_(SHEET_EVENTS);
+  const masterIndex = loadMasterIndex_(masterSheet);
 
   let matches = findEventParticipantsByName_(
     eventSheet,
-    masterSheet,
+    masterIndex,
     eventDate,
     userName,
   );
@@ -270,30 +273,25 @@ function handleCheckinLinkByName_(payload) {
 }
 
 /**
- * 当日 event_histories から氏名一致の参加者を検索
+ * 当日 event_histories から氏名一致の参加者を検索（一括読み込み）
  * @param {GoogleAppsScript.Spreadsheet.Sheet} eventSheet
- * @param {GoogleAppsScript.Spreadsheet.Sheet} masterSheet
+ * @param {Object} masterIndex
  * @param {string} eventDate
- * @param {string} userName サニタイズ済み氏名
+ * @param {string} userName
  * @returns {Object[]}
  */
-function findEventParticipantsByName_(eventSheet, masterSheet, eventDate, userName) {
+function findEventParticipantsByName_(eventSheet, masterIndex, eventDate, userName) {
   const targetName = sanitizeUserName_(userName);
-  const lastRow = eventSheet.getLastRow();
+  const eventRows = loadEventRowsForDate_(eventSheet, eventDate);
   const matches = [];
 
-  for (let row = 2; row <= lastRow; row++) {
-    const event = rowToObject_(eventSheet, row);
-    if (String(event.event_date) !== String(eventDate)) {
-      continue;
-    }
-
+  eventRows.forEach((event) => {
     const email = sanitizeEmailSafe_(event.form_email);
-    const customer = email ? findCustomerByEmail_(masterSheet, email) : null;
+    const customer = email ? masterIndex.byEmail[email] || null : null;
     const displayName = getParticipantDisplayName_(event, customer);
 
     if (displayName !== targetName) {
-      continue;
+      return;
     }
 
     matches.push({
@@ -304,7 +302,7 @@ function findEventParticipantsByName_(eventSheet, masterSheet, eventDate, userNa
         ? String(customer.user_name || targetName)
         : String(event.receipt_name || targetName),
     });
-  }
+  });
 
   return matches;
 }
@@ -585,37 +583,27 @@ function findCustomerByLineId_(sheet, lineUserId) {
   return null;
 }
 
+function findEventHistoryForCheckin_(sheet, criteria) {
+  const eventRows = loadEventRowsForDate_(sheet, criteria.eventDate);
+  return findEventHistoryForCheckinFromRows_(eventRows, criteria);
+}
+
 /**
- * 当日イベントの参加履歴を検索（未受付優先）
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * 読み込み済みの当日行から参加履歴を検索
+ * @param {Object[]} eventRows
  * @param {Object} criteria
  * @returns {Object|null}
  */
-function findEventHistoryForCheckin_(sheet, criteria) {
-  const headerMap = getHeaderMap_(sheet);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) {
-    return null;
-  }
-
-  const matches = [];
-  for (let row = 2; row <= lastRow; row++) {
-    const record = rowToObject_(sheet, row);
-    if (String(record.event_date) !== String(criteria.eventDate)) {
-      continue;
-    }
-
+function findEventHistoryForCheckinFromRows_(eventRows, criteria) {
+  const matches = eventRows.filter((record) => {
     const emailMatch =
       criteria.email &&
       sanitizeEmailSafe_(record.form_email) === sanitizeEmailSafe_(criteria.email);
     const lineMatch =
       criteria.lineUserId &&
       String(record.line_user_id).trim() === criteria.lineUserId;
-
-    if (emailMatch || lineMatch) {
-      matches.push(record);
-    }
-  }
+    return emailMatch || lineMatch;
+  });
 
   if (matches.length === 0) {
     return null;
@@ -623,6 +611,77 @@ function findEventHistoryForCheckin_(sheet, criteria) {
 
   const pending = matches.find((r) => String(r.attendance_status) !== "済");
   return pending || matches[matches.length - 1];
+}
+
+/**
+ * master_customers を一括読み込みしてインデックス化
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} masterSheet
+ * @returns {{ byLineId: Object, byEmail: Object }}
+ */
+function loadMasterIndex_(masterSheet) {
+  const headerMap = getHeaderMap_(masterSheet);
+  const lastRow = masterSheet.getLastRow();
+  const lastCol = masterSheet.getLastColumn();
+  const byLineId = {};
+  const byEmail = {};
+
+  if (lastRow < 2) {
+    return { byLineId, byEmail };
+  }
+
+  const values = masterSheet.getRange(2, 1, lastRow, lastCol).getValues();
+  for (let i = 0; i < values.length; i++) {
+    const obj = rowValuesToObject_(headerMap, values[i], i + 2);
+    const lineId = String(obj.line_user_id || "").trim();
+    const email = sanitizeEmailSafe_(obj.email);
+    if (lineId) {
+      byLineId[lineId] = obj;
+    }
+    if (email) {
+      byEmail[email] = obj;
+    }
+  }
+
+  return { byLineId, byEmail };
+}
+
+/**
+ * 指定日の event_histories を一括読み込み
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} eventSheet
+ * @param {string} eventDate
+ * @returns {Object[]}
+ */
+function loadEventRowsForDate_(eventSheet, eventDate) {
+  const headerMap = getHeaderMap_(eventSheet);
+  const lastRow = eventSheet.getLastRow();
+  const lastCol = eventSheet.getLastColumn();
+  if (lastRow < 2) {
+    return [];
+  }
+
+  const values = eventSheet.getRange(2, 1, lastRow, lastCol).getValues();
+  const rows = [];
+  for (let i = 0; i < values.length; i++) {
+    const obj = rowValuesToObject_(headerMap, values[i], i + 2);
+    if (String(obj.event_date) === String(eventDate)) {
+      rows.push(obj);
+    }
+  }
+  return rows;
+}
+
+/**
+ * @param {Object<string, number>} headerMap
+ * @param {Array} values
+ * @param {number} rowIndex
+ * @returns {Object}
+ */
+function rowValuesToObject_(headerMap, values, rowIndex) {
+  const obj = { _rowIndex: rowIndex };
+  Object.keys(headerMap).forEach((key) => {
+    obj[key] = values[headerMap[key]];
+  });
+  return obj;
 }
 
 /**
@@ -690,7 +749,7 @@ function serializeEvent_(event) {
  */
 function buildCheckinLinkNotification_(ctx) {
   return [
-    "【うお会】当日受付：参加者確認",
+    "【うおの会】当日受付：参加者確認",
     "",
     `イベント日: ${ctx.eventDate}`,
     `氏名: ${ctx.userName || ctx.customer.user_name}`,
@@ -706,7 +765,7 @@ function buildCheckinLinkNotification_(ctx) {
  */
 function buildCheckinCompleteNotification_(ctx) {
   return [
-    "【うお会】✅ 受付完了",
+    "【うおの会】✅ 受付完了",
     "",
     `イベント日: ${ctx.eventDate}`,
     `氏名: ${ctx.customer.user_name}`,
@@ -1161,7 +1220,7 @@ function sendLineNotification_(message) {
 function buildNotificationMessage_(ctx) {
   const label = getPatternLabel_(ctx.pattern);
   const lines = [
-    "【うお会】イベント申込を受信しました",
+    "【うおの会】イベント申込を受信しました",
     "",
     `■ 処理パターン: ${label}`,
     `■ イベント日: ${ctx.eventDate}`,
@@ -1322,7 +1381,7 @@ function testEventApplicationNewCustomer() {
  */
 function testLineNotification() {
   const result = sendLineNotification_(
-    "【うお会】LINE 通知テスト\n\nこのメッセージが届けば設定は OK です。",
+    "【うおの会】LINE 通知テスト\n\nこのメッセージが届けば設定は OK です。",
   );
   Logger.log(JSON.stringify(result, null, 2));
 }

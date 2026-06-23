@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f172a" />
-  <title>うお会 当日受付</title>
+  <title>うおの会 当日受付</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <script>
@@ -98,7 +98,7 @@
       <div class="flex items-center gap-2">
         <span class="text-2xl" aria-hidden="true">🐟</span>
         <div>
-          <p class="text-white text-sm font-bold tracking-wide">うお会</p>
+          <p class="text-white text-sm font-bold tracking-wide">うおの会</p>
           <p class="text-sky-300/80 text-[10px]">当日受付</p>
         </div>
       </div>
@@ -296,7 +296,7 @@
           <article class="glass rounded-3xl shadow-card p-5 animate-fade-up-delay-1">
             <h3 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
               <span>🍣</span>
-              <span>開宴まであと少し！<br class="sm:hidden" />うお会が100倍面白くなるお寿司の雑学</span>
+              <span>開宴まであと少し！<br class="sm:hidden" />うおの会が100倍面白くなるお寿司の雑学</span>
             </h3>
 
             <div class="space-y-5">
@@ -353,7 +353,7 @@
           </article>
 
           <p class="text-center text-sky-300/60 text-xs pb-4 animate-fade-up-delay-3">
-            うお会スタッフ一同、楽しいひとときをお祈りしています 🐟
+            うおの会スタッフ一同、楽しいひとときをお祈りしています 🐟
           </p>
         </div>
       </div>
@@ -377,6 +377,9 @@
       LIFF_URL: "https://liff.line.me/2010484166-bN2zuFKb",
       GAS_API_URL: "https://script.google.com/macros/s/AKfycbw0STTLLXzPWjXiRxu38ex5U9VGWTkhUeXZRCio8ox9llwGXoyUI2Ks6699jH3Vdr0m/exec",
       EVENT_DATE: new URLSearchParams(location.search).get("event") || "20260707",
+      // ようこそ画面のサブタイトル（ここを編集してください）
+      WELCOME_MSG_AUTO: "LINE連携済みのため、自動で確認しました",
+      WELCOME_MSG_DEFAULT: "本日もお越しいただきありがとうございます",
     };
 
     // =========================================================================
@@ -512,8 +515,8 @@
       const c = state.customer;
       $("welcome-title").textContent = `${c.user_name || state.displayName} 様、ようこそ！`;
       $("welcome-subtitle").textContent = autoIdentified
-        ? "LINE連携済みのため、自動で確認しました"
-        : "本日もお越しいただきありがとうございます";
+        ? CONFIG.WELCOME_MSG_AUTO
+        : CONFIG.WELCOME_MSG_DEFAULT;
       $("preview-company").textContent = c.company_name || "—";
       $("preview-position").textContent = formatPosition(c);
 
