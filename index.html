@@ -211,7 +211,7 @@
             <span class="text-2xl">👋</span>
           </div>
           <h2 id="welcome-title" class="text-2xl font-bold text-slate-800 mb-1"></h2>
-          <p class="text-sm text-slate-500">本日もお越しいただきありがとうございます</p>
+          <p id="welcome-subtitle" class="text-sm text-slate-500">本日もお越しいただきありがとうございます</p>
         </div>
 
         <!-- プレビューカード -->
@@ -497,7 +497,7 @@
 
         if (lookup.found && lookup.customer) {
           state.customer = lookup.customer;
-          showWelcomeScreen();
+          showWelcomeScreen(lookup.autoIdentified);
         } else {
           showScreen("name");
         }
@@ -508,9 +508,12 @@
       }
     }
 
-    function showWelcomeScreen() {
+    function showWelcomeScreen(autoIdentified = false) {
       const c = state.customer;
       $("welcome-title").textContent = `${c.user_name || state.displayName} 様、ようこそ！`;
+      $("welcome-subtitle").textContent = autoIdentified
+        ? "LINE連携済みのため、自動で確認しました"
+        : "本日もお越しいただきありがとうございます";
       $("preview-company").textContent = c.company_name || "—";
       $("preview-position").textContent = formatPosition(c);
 
