@@ -711,10 +711,22 @@ function getSpreadsheet_() {
  * @returns {GoogleAppsScript.Spreadsheet.Sheet}
  */
 function getSheet_(sheetName) {
-  const sheet = getSpreadsheet_().getSheetByName(sheetName);
+  const spreadsheet = getSpreadsheet_();
+  let sheet = spreadsheet.getSheetByName(sheetName);
+
   if (!sheet) {
-    throw new Error(`シート "${sheetName}" が見つかりません。`);
+    const headersBySheet = {
+      [SHEET_MASTER]: MASTER_HEADERS,
+      [SHEET_EVENTS]: EVENT_HEADERS,
+    };
+    const headers = headersBySheet[sheetName];
+    if (!headers) {
+      throw new Error(`シート "${sheetName}" が見つかりません。`);
+    }
+    sheet = spreadsheet.insertSheet(sheetName);
+    ensureHeaders_(sheet, headers);
   }
+
   return sheet;
 }
 

@@ -412,10 +412,15 @@
       const url = `${CONFIG.GAS_API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payload)}`;
 
       const response = await fetch(url, { method: "GET" });
-      const result = await response.json();
+      let result;
+      try {
+        result = await response.json();
+      } catch (parseError) {
+        throw new Error(`API応答の解析に失敗しました（HTTP ${response.status}）`);
+      }
 
       if (!result.ok) {
-        throw new Error(result.error || "API エラーが発生しました");
+        throw new Error(result.error || `API エラー（HTTP ${response.status}）`);
       }
       return result;
     }
