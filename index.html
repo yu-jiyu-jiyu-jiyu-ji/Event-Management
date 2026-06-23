@@ -219,6 +219,14 @@
           <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-3">登録情報</p>
           <dl class="space-y-3">
             <div class="flex items-start gap-3">
+              <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">氏名</dt>
+              <dd id="preview-name" class="text-sm font-semibold text-slate-800 flex-1"></dd>
+            </div>
+            <div id="preview-line-name-row" class="flex items-start gap-3 hidden">
+              <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">LINE名</dt>
+              <dd id="preview-line-name" class="text-sm text-slate-600 flex-1"></dd>
+            </div>
+            <div class="flex items-start gap-3">
               <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">会社名</dt>
               <dd id="preview-company" class="text-sm font-semibold text-slate-800 flex-1"></dd>
             </div>
@@ -490,6 +498,7 @@
         const lookup = await callGasApi("checkin_lookup", {
           line_user_id: state.lineUserId,
           event_date: CONFIG.EVENT_DATE,
+          line_display_name: state.displayName,
         });
 
         if (lookup.alreadyCheckedIn) {
@@ -513,10 +522,18 @@
 
     function showWelcomeScreen(autoIdentified = false) {
       const c = state.customer;
-      $("welcome-title").textContent = `${c.user_name || state.displayName} 様、ようこそ！`;
+      $("welcome-title").textContent = `${c.user_name || "ゲスト"} 様、ようこそ！`;
       $("welcome-subtitle").textContent = autoIdentified
         ? CONFIG.WELCOME_MSG_AUTO
         : CONFIG.WELCOME_MSG_DEFAULT;
+      $("preview-name").textContent = c.user_name || "—";
+      const lineName = c.line_display_name || state.displayName;
+      if (lineName && lineName !== c.user_name) {
+        $("preview-line-name").textContent = lineName;
+        $("preview-line-name-row").classList.remove("hidden");
+      } else {
+        $("preview-line-name-row").classList.add("hidden");
+      }
       $("preview-company").textContent = c.company_name || "—";
       $("preview-position").textContent = formatPosition(c);
 
@@ -547,6 +564,7 @@
         line_user_id: state.lineUserId,
         event_date: CONFIG.EVENT_DATE,
         user_name: userName,
+        line_display_name: state.displayName,
         email,
       });
     }
@@ -627,6 +645,7 @@
         const payload = {
           line_user_id: state.lineUserId,
           event_date: CONFIG.EVENT_DATE,
+          line_display_name: state.displayName,
         };
 
         if (state.editMode) {

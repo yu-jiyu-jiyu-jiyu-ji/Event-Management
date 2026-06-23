@@ -33,6 +33,7 @@ const MatchPattern = {
 
 const MASTER_HEADERS = [
   "line_user_id",
+  "line_display_name",
   "user_name",
   "company_name",
   "position_category",
@@ -195,6 +196,14 @@ function handleCheckinLookup_(payload) {
     email: customer.email,
   });
 
+  const lineDisplayName = sanitizeLineDisplayName_(payload.line_display_name || "");
+  if (lineDisplayName) {
+    updateMasterFields_(masterSheet, customer._rowIndex, {
+      line_display_name: lineDisplayName,
+    });
+    customer.line_display_name = lineDisplayName;
+  }
+
   return {
     ok: true,
     found: true,
@@ -269,7 +278,13 @@ function handleCheckinLinkByName_(payload) {
     }
   }
 
-  return linkCheckinParticipant_(lineUserId, eventDate, selected, userName);
+  return linkCheckinParticipant_(
+    lineUserId,
+    eventDate,
+    selected,
+    userName,
+    sanitizeLineDisplayName_(payload.line_display_name || ""),
+  );
 }
 
 /**
@@ -329,9 +344,10 @@ function getParticipantDisplayName_(event, customer) {
  * @param {string} eventDate
  * @param {Object} selected
  * @param {string} userName
+ * @param {string} lineDisplayName
  * @returns {Object}
  */
-function linkCheckinParticipant_(lineUserId, eventDate, selected, userName) {
+function linkCheckinParticipant_(lineUserId, eventDate, selected, userName, lineDisplayName) {
   const masterSheet = getSheet_(SHEET_MASTER);
   const eventSheet = getSheet_(SHEET_EVENTS);
   const email = sanitizeEmail_(selected.email);
@@ -341,9 +357,18 @@ function linkCheckinParticipant_(lineUserId, eventDate, selected, userName) {
     customer = findCustomerByEmail_(masterSheet, email);
   }
 
+  const masterUpdates = {
+    line_user_id: lineUserId,
+    user_name: userName,
+  };
+  if (lineDisplayName) {
+    masterUpdates.line_display_name = lineDisplayName;
+  }
+
   if (!customer) {
     customer = appendMasterCustomer_(masterSheet, {
       line_user_id: lineUserId,
+      line_display_name: lineDisplayName || "",
       user_name: userName,
       company_name: "",
       position_category: "",
@@ -354,10 +379,7 @@ function linkCheckinParticipant_(lineUserId, eventDate, selected, userName) {
       status: CustomerStatus.ACTIVE,
     });
   } else {
-    updateMasterFields_(masterSheet, customer._rowIndex, {
-      line_user_id: lineUserId,
-      user_name: userName,
-    });
+    updateMasterFields_(masterSheet, customer._rowIndex, masterUpdates);
     customer = rowToObject_(masterSheet, customer._rowIndex);
   }
 
@@ -399,6 +421,7 @@ function handleCheckinLinkEmail_(payload) {
   const lineUserId = requireString_(payload.line_user_id, "line_user_id");
   const eventDate = requireString_(payload.event_date, "event_date");
   const email = sanitizeEmail_(payload.email);
+  const lineDisplayName = sanitizeLineDisplayName_(payload.line_display_name || payload.display_name || "");
   const displayName = sanitizeUserName_(payload.display_name || "");
 
   const masterSheet = getSheet_(SHEET_MASTER);
@@ -416,6 +439,7 @@ function handleCheckinLinkEmail_(payload) {
       pattern = MatchPattern.PENDING_NAME;
       customer = appendMasterCustomer_(masterSheet, {
         line_user_id: lineUserId,
+        line_display_name: lineDisplayName,
         user_name: displayName || "未登録",
         company_name: "",
         position_category: "",
@@ -429,6 +453,7 @@ function handleCheckinLinkEmail_(payload) {
       pattern = MatchPattern.NEW_CUSTOMER;
       customer = appendMasterCustomer_(masterSheet, {
         line_user_id: lineUserId,
+        line_display_name: lineDisplayName,
         user_name: displayName || sanitizeUserName_(email.split("@")[0]),
         company_name: "",
         position_category: "",
@@ -440,9 +465,11 @@ function handleCheckinLinkEmail_(payload) {
       });
     }
   } else {
-    updateMasterFields_(masterSheet, customer._rowIndex, {
-      line_user_id: lineUserId,
-    });
+    const updates = { line_user_id: lineUserId };
+    if (lineDisplayName) {
+      updates.line_display_name = lineDisplayName;
+    }
+    updateMasterFields_(masterSheet, customer._rowIndex, updates);
     customer = rowToObject_(masterSheet, customer._rowIndex);
   }
 
@@ -513,6 +540,10 @@ function handleCheckinComplete_(payload) {
   }
   if (payload.position_category !== undefined) {
     masterUpdates.position_category = String(payload.position_category || "").trim();
+  }
+  const lineDisplayName = sanitizeLineDisplayName_(payload.line_display_name || "");
+  if (lineDisplayName) {
+    masterUpdates.line_display_name = lineDisplayName;
   }
   if (Object.keys(masterUpdates).length > 0) {
     updateMasterFields_(masterSheet, customer._rowIndex, masterUpdates);
@@ -719,6 +750,7 @@ function updateEventFields_(sheet, rowIndex, fields) {
 function serializeCustomer_(customer) {
   return {
     line_user_id: customer.line_user_id || "",
+    line_display_name: customer.line_display_name || "",
     user_name: customer.user_name || "",
     company_name: customer.company_name || "",
     position_category: customer.position_category || "",
@@ -753,6 +785,7 @@ function buildCheckinLinkNotification_(ctx) {
     "",
     `イベント日: ${ctx.eventDate}`,
     `氏名: ${ctx.userName || ctx.customer.user_name}`,
+    `LINE表示名: ${ctx.customer.line_display_name || "—"}`,
     `メール: ${ctx.email}`,
     `会社: ${ctx.customer.company_name || "—"}`,
     `status: ${ctx.customer.status}`,
@@ -769,6 +802,7 @@ function buildCheckinCompleteNotification_(ctx) {
     "",
     `イベント日: ${ctx.eventDate}`,
     `氏名: ${ctx.customer.user_name}`,
+    `LINE表示名: ${ctx.customer.line_display_name || "—"}`,
     `会社: ${ctx.customer.company_name || "—"}`,
     `役職: ${ctx.customer.position_name || "—"}`,
     `メール: ${ctx.customer.email}`,
@@ -806,6 +840,7 @@ function handleEventApplication_(payload) {
     pattern = MatchPattern.PENDING_NAME;
     masterRow = appendMasterCustomer_(masterSheet, {
       line_user_id: sanitized.line_user_id || "",
+      line_display_name: "",
       user_name: sanitized.user_name,
       company_name: sanitized.company_name,
       position_category: sanitized.position_category,
@@ -820,6 +855,7 @@ function handleEventApplication_(payload) {
     pattern = MatchPattern.NEW_CUSTOMER;
     masterRow = appendMasterCustomer_(masterSheet, {
       line_user_id: sanitized.line_user_id || "",
+      line_display_name: "",
       user_name: sanitized.user_name,
       company_name: sanitized.company_name,
       position_category: sanitized.position_category,
@@ -908,6 +944,15 @@ function sanitizeUserName_(name) {
 }
 
 /**
+ * LINE プロフィール表示名（スペース・絵文字はそのまま保持）
+ * @param {string} name
+ * @returns {string}
+ */
+function sanitizeLineDisplayName_(name) {
+  return String(name || "").trim();
+}
+
+/**
  * メール：半角化 → 小文字化
  * @param {string} email
  * @returns {string}
@@ -980,6 +1025,8 @@ function getSheet_(sheetName) {
     }
     sheet = spreadsheet.insertSheet(sheetName);
     ensureHeaders_(sheet, headers);
+  } else if (sheetName === SHEET_MASTER) {
+    ensureAllMasterHeaders_(sheet);
   }
 
   return sheet;
@@ -1101,10 +1148,11 @@ function sanitizeEmailSafe_(value) {
  * @returns {Object}
  */
 function appendMasterCustomer_(sheet, data) {
-  ensureHeaders_(sheet, MASTER_HEADERS);
+  ensureAllMasterHeaders_(sheet);
 
   const row = [
     data.line_user_id || "",
+    data.line_display_name || "",
     data.user_name,
     data.company_name || "",
     data.position_category || "",
@@ -1157,6 +1205,25 @@ function ensureHeaders_(sheet, expectedHeaders) {
     return;
   }
   sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+}
+
+/**
+ * master_customers に不足しているヘッダー列を末尾に追加
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function ensureAllMasterHeaders_(sheet) {
+  if (sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) {
+    sheet.getRange(1, 1, 1, MASTER_HEADERS.length).setValues([MASTER_HEADERS]);
+    return;
+  }
+
+  const headerMap = getHeaderMap_(sheet);
+  MASTER_HEADERS.forEach((header) => {
+    if (headerMap[header] === undefined) {
+      const newCol = sheet.getLastColumn() + 1;
+      sheet.getRange(1, newCol).setValue(header);
+    }
+  });
 }
 
 // =============================================================================
