@@ -177,28 +177,7 @@ function handleCheckinLookup_(payload) {
   const masterSheet = getSheet_(SHEET_MASTER);
   const eventSheet = getSheet_(SHEET_EVENTS);
 
-  let customer = findCustomerByLineId_(masterSheet, lineUserId);
-  let autoIdentified = false;
-
-  // master に無くても、当日リストに line_user_id があれば自動特定
-  let eventHistory = findEventHistoryForCheckin_(eventSheet, {
-    eventDate,
-    lineUserId,
-  });
-
-  if (!customer && eventHistory) {
-    const email = sanitizeEmailSafe_(eventHistory.form_email);
-    if (email) {
-      customer = findCustomerByEmail_(masterSheet, email);
-      if (customer) {
-        updateMasterFields_(masterSheet, customer._rowIndex, {
-          line_user_id: lineUserId,
-        });
-        customer = rowToObject_(masterSheet, customer._rowIndex);
-        autoIdentified = true;
-      }
-    }
-  }
+  const customer = findCustomerByLineId_(masterSheet, lineUserId);
 
   if (!customer) {
     return {
@@ -208,24 +187,17 @@ function handleCheckinLookup_(payload) {
     };
   }
 
-  if (!eventHistory) {
-    eventHistory = findEventHistoryForCheckin_(eventSheet, {
-      eventDate,
-      lineUserId,
-      email: customer.email,
-    });
-  }
-
-  // master に userId がある＝2回目以降の受付 → 氏名入力スキップ
-  if (String(customer.line_user_id).trim() === lineUserId) {
-    autoIdentified = true;
-  }
+  const eventHistory = findEventHistoryForCheckin_(eventSheet, {
+    eventDate,
+    lineUserId,
+    email: customer.email,
+  });
 
   return {
     ok: true,
     found: true,
     needsName: false,
-    autoIdentified,
+    autoIdentified: true,
     customer: serializeCustomer_(customer),
     eventHistory: eventHistory ? serializeEvent_(eventHistory) : null,
     alreadyCheckedIn:
