@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>うお会 当日受付</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            uo: {
+              50: "#f0f9ff",
+              100: "#e0f2fe",
+              200: "#bae6fd",
+              300: "#7dd3fc",
+              400: "#38bdf8",
+              500: "#0ea5e9",
+              600: "#0284c7",
+              700: "#0369a1",
+              800: "#075985",
+              900: "#0c4a6e",
+              950: "#082f49",
+            },
+            accent: {
+              DEFAULT: "#f59e0b",
+              light: "#fbbf24",
+              dark: "#d97706",
+            },
+          },
+          fontFamily: {
+            sans: [
+              "Hiragino Sans",
+              "Hiragino Kaku Gothic ProN",
+              "Noto Sans JP",
+              "Yu Gothic",
+              "Meiryo",
+              "sans-serif",
+            ],
+          },
+          boxShadow: {
+            card: "0 8px 32px rgba(15, 23, 42, 0.12)",
+            glow: "0 0 40px rgba(14, 165, 233, 0.15)",
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulse-soft {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .animate-fade-up { animation: fadeUp 0.5s ease-out both; }
+    .animate-fade-up-delay-1 { animation: fadeUp 0.5s 0.1s ease-out both; }
+    .animate-fade-up-delay-2 { animation: fadeUp 0.5s 0.2s ease-out both; }
+    .animate-fade-up-delay-3 { animation: fadeUp 0.5s 0.3s ease-out both; }
+    .animate-pulse-soft { animation: pulse-soft 1.8s ease-in-out infinite; }
+    .skeleton {
+      background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .gradient-bg {
+      background: linear-gradient(160deg, #0f172a 0%, #0c4a6e 45%, #082f49 100%);
+    }
+    .glass {
+      background: rgba(255, 255, 255, 0.97);
+      backdrop-filter: blur(12px);
+    }
+    input:focus, button:focus-visible {
+      outline: 2px solid #0ea5e9;
+      outline-offset: 2px;
+    }
+    .topic-card {
+      border-left: 3px solid #f59e0b;
+    }
+  </style>
+</head>
+<body class="gradient-bg min-h-screen text-slate-800 antialiased">
+
+  <!-- ヘッダー -->
+  <header class="fixed top-0 inset-x-0 z-50 px-4 pt-safe">
+    <div class="max-w-md mx-auto flex items-center justify-between py-3">
+      <div class="flex items-center gap-2">
+        <span class="text-2xl" aria-hidden="true">🐟</span>
+        <div>
+          <p class="text-white text-sm font-bold tracking-wide">うお会</p>
+          <p class="text-sky-300/80 text-[10px]">当日受付</p>
+        </div>
+      </div>
+      <span id="event-badge" class="text-[10px] bg-white/10 text-sky-200 px-2.5 py-1 rounded-full border border-white/10"></span>
+    </div>
+  </header>
+
+  <main class="max-w-md mx-auto px-4 pt-20 pb-10 min-h-screen">
+
+    <!-- ===== ローディング ===== -->
+    <section id="screen-loading" class="screen active">
+      <div class="glass rounded-3xl shadow-card p-8 mt-8 text-center animate-fade-up">
+        <div class="w-14 h-14 mx-auto mb-5 rounded-2xl bg-sky-50 flex items-center justify-center">
+          <svg class="w-7 h-7 text-uo-500 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+        <p class="text-slate-600 text-sm animate-pulse-soft">受付システムを準備しています…</p>
+        <div class="mt-6 space-y-2">
+          <div class="h-3 rounded-full skeleton w-3/4 mx-auto"></div>
+          <div class="h-3 rounded-full skeleton w-1/2 mx-auto"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== エラー ===== -->
+    <section id="screen-error" class="screen">
+      <div class="glass rounded-3xl shadow-card p-8 mt-8 text-center animate-fade-up">
+        <div class="text-4xl mb-4">⚠️</div>
+        <h2 class="text-lg font-bold text-slate-800 mb-2">接続エラー</h2>
+        <p id="error-message" class="text-sm text-slate-500 mb-6 leading-relaxed"></p>
+        <button id="btn-retry" type="button"
+          class="w-full py-3.5 rounded-2xl bg-uo-600 text-white font-semibold text-sm
+                 hover:bg-uo-700 active:scale-[0.98] transition-all">
+          もう一度試す
+        </button>
+      </div>
+    </section>
+
+    <!-- ===== メール入力（新規・未連携） ===== -->
+    <section id="screen-email" class="screen">
+      <div class="glass rounded-3xl shadow-card shadow-glow p-6 mt-4 animate-fade-up">
+        <div class="text-center mb-6">
+          <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-100 to-uo-100 mb-4">
+            <span class="text-3xl">📧</span>
+          </div>
+          <h2 class="text-xl font-bold text-slate-800 mb-2">ようこそ！</h2>
+          <p class="text-sm text-slate-500 leading-relaxed">
+            受付と名簿作成のため、<br />メールアドレスを入力してください
+          </p>
+        </div>
+
+        <form id="form-email" class="space-y-4">
+          <div>
+            <label for="input-email" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              メールアドレス
+            </label>
+            <input
+              id="input-email"
+              type="email"
+              inputmode="email"
+              autocomplete="email"
+              placeholder="example@company.com"
+              required
+              class="w-full px-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50
+                     text-base text-slate-800 placeholder:text-slate-400
+                     focus:border-uo-400 focus:bg-white transition-colors"
+            />
+          </div>
+          <button id="btn-email-submit" type="submit"
+            class="w-full py-4 rounded-2xl bg-gradient-to-r from-uo-600 to-uo-500
+                   text-white font-bold text-sm shadow-lg shadow-uo-500/25
+                   hover:from-uo-700 hover:to-uo-600 active:scale-[0.98] transition-all
+                   disabled:opacity-50 disabled:cursor-not-allowed">
+            次へ進む
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ===== 既存顧客：プレビュー ===== -->
+    <section id="screen-welcome" class="screen">
+      <div class="glass rounded-3xl shadow-card shadow-glow p-6 mt-4 animate-fade-up">
+        <div class="text-center mb-6">
+          <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-accent-light to-accent mb-4 ring-4 ring-accent/20">
+            <span class="text-2xl">👋</span>
+          </div>
+          <h2 id="welcome-title" class="text-2xl font-bold text-slate-800 mb-1"></h2>
+          <p class="text-sm text-slate-500">本日もお越しいただきありがとうございます</p>
+        </div>
+
+        <!-- プレビューカード -->
+        <div id="preview-card" class="bg-gradient-to-br from-slate-50 to-sky-50 rounded-2xl p-5 mb-5 border border-slate-100">
+          <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-3">登録情報</p>
+          <dl class="space-y-3">
+            <div class="flex items-start gap-3">
+              <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">会社名</dt>
+              <dd id="preview-company" class="text-sm font-semibold text-slate-800 flex-1"></dd>
+            </div>
+            <div class="flex items-start gap-3">
+              <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">役職</dt>
+              <dd id="preview-position" class="text-sm font-semibold text-slate-800 flex-1"></dd>
+            </div>
+          </dl>
+        </div>
+
+        <!-- 編集フォーム（初期非表示） -->
+        <form id="form-edit" class="hidden space-y-4 mb-5 animate-fade-up">
+          <p class="text-xs text-slate-500 text-center">変更内容を入力してください</p>
+          <div>
+            <label for="edit-company" class="block text-xs font-semibold text-slate-500 mb-1.5">会社名</label>
+            <input id="edit-company" type="text"
+              class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm
+                     focus:border-uo-400 transition-colors" />
+          </div>
+          <div>
+            <label for="edit-position-category" class="block text-xs font-semibold text-slate-500 mb-1.5">区分</label>
+            <select id="edit-position-category"
+              class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm
+                     focus:border-uo-400 transition-colors">
+              <option value="">選択してください</option>
+              <option value="経営者">経営者</option>
+              <option value="役員">役員</option>
+              <option value="管理職">管理職</option>
+              <option value="一般社員">一般社員</option>
+              <option value="フリーランス">フリーランス</option>
+              <option value="その他">その他</option>
+            </select>
+          </div>
+          <div>
+            <label for="edit-position-name" class="block text-xs font-semibold text-slate-500 mb-1.5">役職名</label>
+            <input id="edit-position-name" type="text" placeholder="例：代表取締役"
+              class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white text-sm
+                     focus:border-uo-400 transition-colors" />
+          </div>
+        </form>
+
+        <button id="btn-checkin" type="button"
+          class="w-full py-4 rounded-2xl bg-gradient-to-r from-accent-dark to-accent
+                 text-white font-bold text-base shadow-lg shadow-accent/30
+                 hover:from-accent hover:to-accent-light active:scale-[0.98] transition-all
+                 disabled:opacity-50 disabled:cursor-not-allowed">
+          この内容で受付を完了する
+        </button>
+
+        <button id="btn-toggle-edit" type="button"
+          class="w-full mt-3 py-2 text-xs text-slate-400 hover:text-uo-600 transition-colors underline underline-offset-2">
+          変更がある場合はこちらから修正
+        </button>
+      </div>
+    </section>
+
+    <!-- ===== 受付完了 ===== -->
+    <section id="screen-complete" class="screen">
+      <div class="animate-fade-up">
+        <!-- 完了ヘッダー -->
+        <div class="text-center py-6">
+          <div class="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white/10 mb-4 ring-4 ring-white/20">
+            <span class="text-4xl">🎉</span>
+          </div>
+          <h2 class="text-2xl font-bold text-white mb-2 leading-snug">
+            受付が完了しました！<br />お席へどうぞ。
+          </h2>
+          <p class="text-sky-200/80 text-sm">素敵なひとときをお過ごしください</p>
+        </div>
+
+        <!-- コンテンツカード -->
+        <div class="space-y-4">
+
+          <!-- 寿司雑学 -->
+          <article class="glass rounded-3xl shadow-card p-5 animate-fade-up-delay-1">
+            <h3 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <span>🍣</span>
+              <span>開宴まであと少し！<br class="sm:hidden" />うお会が100倍面白くなるお寿司の雑学</span>
+            </h3>
+
+            <div class="space-y-5">
+              <div class="bg-slate-50 rounded-2xl p-4">
+                <h4 class="text-sm font-bold text-uo-700 mb-2">
+                  なぜお寿司は「2貫」ずつ出てくるの？
+                </h4>
+                <p class="text-xs text-slate-600 leading-relaxed">
+                  江戸時代、寿司は今よりずっと大きかったんです。握り1つが手のひらサイズもあり、
+                  「1貫」はかなりボリュームがありました。江戸の職人たちは、
+                  食べやすく・会話のテンポを崩さないサイズへと少しずつ小型化。
+                  その結果、今の「2貫＝ちょうどいい一口サイズ×2」という黄金比が生まれたのです。
+                  つまり2貫は「少なめ」ではなく、江戸の職人が磨き上げた<strong>最適解</strong>なんです。
+                </p>
+              </div>
+
+              <div class="bg-slate-50 rounded-2xl p-4">
+                <h4 class="text-sm font-bold text-uo-700 mb-2">
+                  「ガリ」に隠された、江戸時代の超ハイテク
+                </h4>
+                <p class="text-xs text-slate-600 leading-relaxed">
+                  ガリ（生姜）は、ただの「口直し」ではありません。
+                  江戸時代、冷蔵庫のない時代に生姜の殺菌・抗菌作用は天然のフードセーフティシステム。
+                  魚の脂っこいネタのあとにガリを食べることで、味覚をリセットし、
+                  次のネタの繊細な味わいを最大限に楽しめる——
+                  まさに<strong>口内オペレーション最適化</strong>の先駆けテクノロジーです。
+                  現代のペアリング理論の原点が、江戸のカウンターにありました。
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <!-- 会話のお題 -->
+          <article class="glass rounded-3xl shadow-card p-5 animate-fade-up-delay-2">
+            <h3 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <span>🗣️</span>
+              <span>近くの席の方と話してみよう！<br class="sm:hidden" />本日のお題</span>
+            </h3>
+
+            <div class="space-y-3">
+              <div class="topic-card bg-amber-50 rounded-2xl p-4 pl-5">
+                <p class="text-[10px] font-bold text-accent-dark uppercase tracking-wider mb-1.5">お題 ①</p>
+                <p class="text-sm text-slate-700 leading-relaxed font-medium">
+                  「最近、自分のビジネスや生活で一番『仕組み化・自動化』して感動したことってありますか？」
+                </p>
+              </div>
+              <div class="topic-card bg-amber-50 rounded-2xl p-4 pl-5">
+                <p class="text-[10px] font-bold text-accent-dark uppercase tracking-wider mb-1.5">お題 ②</p>
+                <p class="text-sm text-slate-700 leading-relaxed font-medium">
+                  「もし今、AIが自分の仕事を1つだけ完全に代行してくれるとしたら、何の作業を丸投げしたいですか？」
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <p class="text-center text-sky-300/60 text-xs pb-4 animate-fade-up-delay-3">
+            うお会スタッフ一同、楽しいひとときをお祈りしています 🐟
+          </p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- トースト -->
+  <div id="toast"
+    class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl
+           bg-slate-900/90 text-white text-sm font-medium shadow-xl
+           opacity-0 pointer-events-none transition-opacity duration-300 max-w-xs text-center">
+  </div>
+
+  <script>
+    // =========================================================================
+    // 設定（デプロイ前に書き換えてください）
+    // =========================================================================
+    const CONFIG = {
+      LIFF_ID: "YOUR_LIFF_ID",
+      GAS_API_URL: "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec",
+      EVENT_DATE: new URLSearchParams(location.search).get("event") || "20260707",
+    };
+
+    // =========================================================================
+    // アプリ状態
+    // =========================================================================
+    const state = {
+      lineUserId: null,
+      displayName: "",
+      customer: null,
+      editMode: false,
+      isSubmitting: false,
+    };
+
+    // =========================================================================
+    // DOM ユーティリティ
+    // =========================================================================
+    const $ = (id) => document.getElementById(id);
+
+    function showScreen(name) {
+      document.querySelectorAll(".screen").forEach((el) => el.classList.remove("active"));
+      const target = $("screen-" + name);
+      if (target) target.classList.add("active");
+    }
+
+    function showToast(message, duration = 2800) {
+      const toast = $("toast");
+      toast.textContent = message;
+      toast.style.opacity = "1";
+      setTimeout(() => { toast.style.opacity = "0"; }, duration);
+    }
+
+    function setLoading(button, loading, defaultText) {
+      if (!button) return;
+      button.disabled = loading;
+      button.textContent = loading ? "処理中…" : defaultText;
+    }
+
+    function formatEventDate(dateStr) {
+      if (!dateStr || dateStr.length !== 8) return dateStr;
+      const y = dateStr.slice(0, 4);
+      const m = dateStr.slice(4, 6);
+      const d = dateStr.slice(6, 8);
+      return `${y}/${m}/${d}`;
+    }
+
+    function formatPosition(customer) {
+      const parts = [customer.position_category, customer.position_name].filter(Boolean);
+      return parts.length ? parts.join(" / ") : "—";
+    }
+
+    // =========================================================================
+    // GAS API 通信（GET で CORS 回避）
+    // =========================================================================
+    async function callGasApi(action, data = {}) {
+      const payload = JSON.stringify({ action, ...data });
+      const url = `${CONFIG.GAS_API_URL}?action=${encodeURIComponent(action)}&payload=${encodeURIComponent(payload)}`;
+
+      const response = await fetch(url, { method: "GET" });
+      const result = await response.json();
+
+      if (!result.ok) {
+        throw new Error(result.error || "API エラーが発生しました");
+      }
+      return result;
+    }
+
+    // =========================================================================
+    // LIFF 初期化
+    // =========================================================================
+    async function initLiff() {
+      if (!CONFIG.LIFF_ID || CONFIG.LIFF_ID === "YOUR_LIFF_ID") {
+        throw new Error("LIFF_ID が未設定です。index.html の CONFIG を編集してください。");
+      }
+      if (!CONFIG.GAS_API_URL || CONFIG.GAS_API_URL.includes("YOUR_DEPLOYMENT_ID")) {
+        throw new Error("GAS_API_URL が未設定です。index.html の CONFIG を編集してください。");
+      }
+
+      await liff.init({ liffId: CONFIG.LIFF_ID });
+
+      if (!liff.isLoggedIn()) {
+        liff.login({ redirectUri: window.location.href });
+        return null;
+      }
+
+      const profile = await liff.getProfile();
+      state.lineUserId = profile.userId;
+      state.displayName = profile.displayName || "";
+      return profile;
+    }
+
+    // =========================================================================
+    // 画面フロー
+    // =========================================================================
+    async function bootstrap() {
+      showScreen("loading");
+      $("event-badge").textContent = formatEventDate(CONFIG.EVENT_DATE);
+
+      try {
+        await initLiff();
+        if (!state.lineUserId) return;
+
+        const lookup = await callGasApi("checkin_lookup", {
+          line_user_id: state.lineUserId,
+          event_date: CONFIG.EVENT_DATE,
+        });
+
+        if (lookup.alreadyCheckedIn) {
+          state.customer = lookup.customer;
+          showCompleteScreen();
+          return;
+        }
+
+        if (lookup.found && lookup.customer) {
+          state.customer = lookup.customer;
+          showWelcomeScreen();
+        } else {
+          showScreen("email");
+        }
+      } catch (err) {
+        console.error(err);
+        $("error-message").textContent = err.message || "不明なエラーが発生しました。";
+        showScreen("error");
+      }
+    }
+
+    function showWelcomeScreen() {
+      const c = state.customer;
+      $("welcome-title").textContent = `${c.user_name || state.displayName} 様、ようこそ！`;
+      $("preview-company").textContent = c.company_name || "—";
+      $("preview-position").textContent = formatPosition(c);
+
+      $("edit-company").value = c.company_name || "";
+      $("edit-position-category").value = c.position_category || "";
+      $("edit-position-name").value = c.position_name || "";
+
+      state.editMode = false;
+      $("form-edit").classList.add("hidden");
+      $("btn-toggle-edit").textContent = "変更がある場合はこちらから修正";
+      showScreen("welcome");
+    }
+
+    function showCompleteScreen() {
+      showScreen("complete");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    // =========================================================================
+    // イベントハンドラ
+    // =========================================================================
+    $("form-email").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (state.isSubmitting) return;
+
+      const email = $("input-email").value.trim();
+      if (!email) return;
+
+      state.isSubmitting = true;
+      setLoading($("btn-email-submit"), true, "次へ進む");
+
+      try {
+        const result = await callGasApi("checkin_link_email", {
+          line_user_id: state.lineUserId,
+          event_date: CONFIG.EVENT_DATE,
+          email,
+          display_name: state.displayName,
+        });
+
+        state.customer = result.customer;
+
+        if (result.alreadyCheckedIn) {
+          showCompleteScreen();
+        } else {
+          showWelcomeScreen();
+          if (result.pattern === "pending_name") {
+            showToast("氏名が一致する既存データがあります。スタッフが確認します。");
+          }
+        }
+      } catch (err) {
+        showToast(err.message || "連携に失敗しました");
+      } finally {
+        state.isSubmitting = false;
+        setLoading($("btn-email-submit"), false, "次へ進む");
+      }
+    });
+
+    $("btn-toggle-edit").addEventListener("click", () => {
+      state.editMode = !state.editMode;
+      const form = $("form-edit");
+      if (state.editMode) {
+        form.classList.remove("hidden");
+        $("btn-toggle-edit").textContent = "編集を閉じる";
+      } else {
+        form.classList.add("hidden");
+        $("btn-toggle-edit").textContent = "変更がある場合はこちらから修正";
+        const c = state.customer;
+        $("preview-company").textContent = c.company_name || "—";
+        $("preview-position").textContent = formatPosition(c);
+      }
+    });
+
+    $("btn-checkin").addEventListener("click", async () => {
+      if (state.isSubmitting) return;
+      state.isSubmitting = true;
+      setLoading($("btn-checkin"), true, "この内容で受付を完了する");
+
+      try {
+        const payload = {
+          line_user_id: state.lineUserId,
+          event_date: CONFIG.EVENT_DATE,
+        };
+
+        if (state.editMode) {
+          payload.company_name = $("edit-company").value.trim();
+          payload.position_category = $("edit-position-category").value;
+          payload.position_name = $("edit-position-name").value.trim();
+        }
+
+        const result = await callGasApi("checkin_complete", payload);
+        state.customer = result.customer;
+        showCompleteScreen();
+      } catch (err) {
+        showToast(err.message || "受付に失敗しました");
+      } finally {
+        state.isSubmitting = false;
+        setLoading($("btn-checkin"), false, "この内容で受付を完了する");
+      }
+    });
+
+    $("btn-retry").addEventListener("click", () => bootstrap());
+
+    // =========================================================================
+    // 起動
+    // =========================================================================
+    bootstrap();
+  </script>
+</body>
+</html>
