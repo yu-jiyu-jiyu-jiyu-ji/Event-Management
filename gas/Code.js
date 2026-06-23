@@ -275,7 +275,7 @@ function handleCheckinLinkEmail_(payload) {
     eventHistory = rowToObject_(eventSheet, eventHistory._rowIndex);
   }
 
-  sendLineNotification_(
+  const lineNotification = sendLineNotification_(
     buildCheckinLinkNotification_({
       pattern,
       customer,
@@ -291,6 +291,7 @@ function handleCheckinLinkEmail_(payload) {
     customer: serializeCustomer_(customer),
     eventHistory: serializeEvent_(eventHistory),
     alreadyCheckedIn: String(eventHistory.attendance_status) === "済",
+    lineNotification,
   };
 }
 
@@ -348,7 +349,7 @@ function handleCheckinComplete_(payload) {
   });
   eventHistory = rowToObject_(eventSheet, eventHistory._rowIndex);
 
-  sendLineNotification_(
+  const lineNotification = sendLineNotification_(
     buildCheckinCompleteNotification_({
       customer,
       eventDate,
@@ -360,6 +361,7 @@ function handleCheckinComplete_(payload) {
     ok: true,
     customer: serializeCustomer_(customer),
     eventHistory: serializeEvent_(eventHistory),
+    lineNotification,
   };
 }
 
@@ -597,7 +599,7 @@ function handleEventApplication_(payload) {
     eventRow,
   });
 
-  sendLineNotification_(notificationPayload.text);
+  const lineNotification = sendLineNotification_(notificationPayload.text);
 
   return {
     ok: true,
@@ -605,6 +607,7 @@ function handleEventApplication_(payload) {
     patternLabel: getPatternLabel_(pattern),
     customer: existingByEmail || masterRow,
     eventHistory: eventRow,
+    lineNotification,
     pendingMatchCandidates:
       pattern === MatchPattern.PENDING_NAME
         ? existingByName.map((c) => ({
@@ -910,7 +913,9 @@ function ensureHeaders_(sheet, expectedHeaders) {
 
 /**
  * 魚谷さん（管理者）の LINE へ Push 通知
+ * 失敗しても業務処理は継続する（受付を止めない）
  * @param {string} message
+ * @returns {{ sent: boolean, error?: string }}
  */
 function sendLineNotification_(message) {
   const token = PropertiesService.getScriptProperties().getProperty(
@@ -921,8 +926,9 @@ function sendLineNotification_(message) {
   );
 
   if (!token || !userId) {
-    console.warn("LINE 通知スキップ: LINE_CHANNEL_ACCESS_TOKEN または LINE_ADMIN_USER_ID 未設定");
-    return;
+    const msg = "LINE_CHANNEL_ACCESS_TOKEN または LINE_ADMIN_USER_ID が未設定";
+    console.warn("LINE 通知スキップ:", msg);
+    return { sent: false, error: msg };
   }
 
   const url = "https://api.line.me/v2/bot/message/push";
@@ -942,10 +948,17 @@ function sendLineNotification_(message) {
   });
 
   const status = response.getResponseCode();
+  const body = response.getContentText();
+
   if (status < 200 || status >= 300) {
-    console.error("LINE Push 失敗:", status, response.getContentText());
-    throw new Error("LINE 通知の送信に失敗しました。");
+    console.error("LINE Push 失敗:", status, body);
+    return {
+      sent: false,
+      error: `LINE Push 失敗 (${status}): ${body}`,
+    };
   }
+
+  return { sent: true };
 }
 
 /**
@@ -1107,5 +1120,16 @@ function testEventApplicationNewCustomer() {
     receipt_required: "要",
     receipt_name: "テスト太郎",
   });
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
+/**
+ * LINE Push 通知の疎通確認（GAS エディタから手動実行）
+ * 失敗時はログに HTTP ステータスとレスポンス本文が出ます。
+ */
+function testLineNotification() {
+  const result = sendLineNotification_(
+    "【うお会】LINE 通知テスト\n\nこのメッセージが届けば設定は OK です。",
+  );
   Logger.log(JSON.stringify(result, null, 2));
 }
