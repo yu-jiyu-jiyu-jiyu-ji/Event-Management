@@ -31,31 +31,61 @@ const MatchPattern = {
   NEW_CUSTOMER: "new_customer", // パターンC
 };
 
-const MASTER_HEADERS = [
-  "line_user_id",
-  "line_display_name",
-  "user_name",
-  "company_name",
-  "position_category",
-  "position_name",
-  "email",
-  "phone_number",
-  "referrer",
-  "status",
-  "created_at",
+const MASTER_SCHEMA = [
+  { key: "line_user_id", label: "LINEユーザーID" },
+  { key: "line_display_name", label: "LINE表示名" },
+  { key: "user_name", label: "氏名" },
+  { key: "company_name", label: "会社名" },
+  { key: "position_category", label: "区分" },
+  { key: "position_name", label: "役職" },
+  { key: "email", label: "メールアドレス" },
+  { key: "phone_number", label: "電話番号" },
+  { key: "referrer", label: "紹介者" },
+  { key: "status", label: "ステータス" },
+  { key: "created_at", label: "登録日時" },
 ];
 
-const EVENT_HEADERS = [
-  "timestamp",
-  "event_date",
-  "form_email",
-  "receipt_required",
-  "receipt_name",
-  "line_user_id",
-  "payment_status",
-  "attendance_status",
-  "receipt_dl_count",
+const EVENT_SCHEMA = [
+  { key: "timestamp", label: "記録日時" },
+  { key: "event_date", label: "イベント日" },
+  { key: "form_email", label: "申込メール" },
+  { key: "receipt_required", label: "領収書" },
+  { key: "receipt_name", label: "領収書宛名" },
+  { key: "line_user_id", label: "LINEユーザーID" },
+  { key: "payment_status", label: "支払い状況" },
+  { key: "attendance_status", label: "来場状況" },
+  { key: "receipt_dl_count", label: "領収書DL数" },
 ];
+
+const MASTER_HEADERS = MASTER_SCHEMA.map((col) => col.label);
+const EVENT_HEADERS = EVENT_SCHEMA.map((col) => col.label);
+
+/** 日本語ヘッダー・旧英語ヘッダー → 内部キー */
+const COLUMN_LABEL_TO_KEY_ = (function buildColumnMaps_() {
+  const map = {};
+  MASTER_SCHEMA.concat(EVENT_SCHEMA).forEach((col) => {
+    map[col.label] = col.key;
+    map[col.key] = col.key;
+  });
+  return map;
+})();
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string} key
+ * @returns {number|undefined}
+ */
+function getColumnIndexForKey_(sheet, key) {
+  const headerMap = getHeaderMap_(sheet);
+  const schemaCol = MASTER_SCHEMA.concat(EVENT_SCHEMA).find((c) => c.key === key);
+  if (schemaCol && headerMap[schemaCol.label] !== undefined) {
+    return headerMap[schemaCol.label];
+  }
+  if (headerMap[key] !== undefined) {
+    return headerMap[key];
+  }
+  return undefined;
+}
 
 // =============================================================================
 // HTTP エントリポイント
@@ -594,10 +624,9 @@ function handleCheckinComplete_(payload) {
  * @returns {Object|null}
  */
 function findCustomerByLineId_(sheet, lineUserId) {
-  const headerMap = getHeaderMap_(sheet);
-  const col = headerMap.line_user_id;
+  const col = getColumnIndexForKey_(sheet, "line_user_id");
   if (col === undefined) {
-    throw new Error("master_customers に line_user_id 列がありません。");
+    throw new Error("master_customers に LINEユーザーID 列がありません。");
   }
 
   const lastRow = sheet.getLastRow();
@@ -709,8 +738,9 @@ function loadEventRowsForDate_(eventSheet, eventDate) {
  */
 function rowValuesToObject_(headerMap, values, rowIndex) {
   const obj = { _rowIndex: rowIndex };
-  Object.keys(headerMap).forEach((key) => {
-    obj[key] = values[headerMap[key]];
+  Object.keys(headerMap).forEach((header) => {
+    const key = COLUMN_LABEL_TO_KEY_[header] || header;
+    obj[key] = values[headerMap[header]];
   });
   return obj;
 }
@@ -721,10 +751,10 @@ function rowValuesToObject_(headerMap, values, rowIndex) {
  * @param {Object} fields
  */
 function updateMasterFields_(sheet, rowIndex, fields) {
-  const headerMap = getHeaderMap_(sheet);
   Object.keys(fields).forEach((key) => {
-    if (headerMap[key] !== undefined) {
-      sheet.getRange(rowIndex, headerMap[key] + 1).setValue(fields[key]);
+    const col = getColumnIndexForKey_(sheet, key);
+    if (col !== undefined) {
+      sheet.getRange(rowIndex, col + 1).setValue(fields[key]);
     }
   });
 }
@@ -735,10 +765,10 @@ function updateMasterFields_(sheet, rowIndex, fields) {
  * @param {Object} fields
  */
 function updateEventFields_(sheet, rowIndex, fields) {
-  const headerMap = getHeaderMap_(sheet);
   Object.keys(fields).forEach((key) => {
-    if (headerMap[key] !== undefined) {
-      sheet.getRange(rowIndex, headerMap[key] + 1).setValue(fields[key]);
+    const col = getColumnIndexForKey_(sheet, key);
+    if (col !== undefined) {
+      sheet.getRange(rowIndex, col + 1).setValue(fields[key]);
     }
   });
 }
@@ -1043,6 +1073,8 @@ function getSheet_(sheetName) {
     ensureHeaders_(sheet, headers);
   } else if (sheetName === SHEET_MASTER) {
     ensureAllMasterHeaders_(sheet);
+  } else if (sheetName === SHEET_EVENTS) {
+    ensureAllEventHeaders_(sheet);
   }
 
   return sheet;
@@ -1078,8 +1110,9 @@ function rowToObject_(sheet, rowIndex) {
   const lastCol = sheet.getLastColumn();
   const values = sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
   const obj = { _rowIndex: rowIndex };
-  Object.keys(headerMap).forEach((key) => {
-    obj[key] = values[headerMap[key]];
+  Object.keys(headerMap).forEach((header) => {
+    const key = COLUMN_LABEL_TO_KEY_[header] || header;
+    obj[key] = values[headerMap[header]];
   });
   return obj;
 }
@@ -1091,10 +1124,9 @@ function rowToObject_(sheet, rowIndex) {
  * @returns {Object|null}
  */
 function findCustomerByEmail_(sheet, email) {
-  const headerMap = getHeaderMap_(sheet);
-  const emailCol = headerMap.email;
+  const emailCol = getColumnIndexForKey_(sheet, "email");
   if (emailCol === undefined) {
-    throw new Error("master_customers に email 列がありません。");
+    throw new Error("master_customers にメールアドレス列がありません。");
   }
 
   const lastRow = sheet.getLastRow();
@@ -1119,10 +1151,9 @@ function findCustomerByEmail_(sheet, email) {
  * @returns {Object[]}
  */
 function findCustomersByName_(sheet, userName) {
-  const headerMap = getHeaderMap_(sheet);
-  const nameCol = headerMap.user_name;
+  const nameCol = getColumnIndexForKey_(sheet, "user_name");
   if (nameCol === undefined) {
-    throw new Error("master_customers に user_name 列がありません。");
+    throw new Error("master_customers に氏名列がありません。");
   }
 
   const lastRow = sheet.getLastRow();
@@ -1166,19 +1197,12 @@ function sanitizeEmailSafe_(value) {
 function appendMasterCustomer_(sheet, data) {
   ensureAllMasterHeaders_(sheet);
 
-  const row = [
-    data.line_user_id || "",
-    data.line_display_name || "",
-    data.user_name,
-    data.company_name || "",
-    data.position_category || "",
-    data.position_name || "",
-    data.email,
-    data.phone_number || "",
-    data.referrer || "",
-    data.status || CustomerStatus.ACTIVE,
-    new Date(),
-  ];
+  const row = MASTER_SCHEMA.map((col) => {
+    if (col.key === "created_at") {
+      return new Date();
+    }
+    return data[col.key] !== undefined ? data[col.key] : "";
+  });
 
   sheet.appendRow(row);
   const newRowIndex = sheet.getLastRow();
@@ -1192,19 +1216,32 @@ function appendMasterCustomer_(sheet, data) {
  * @returns {Object}
  */
 function appendEventHistory_(sheet, data) {
-  ensureHeaders_(sheet, EVENT_HEADERS);
+  ensureAllEventHeaders_(sheet);
 
-  const row = [
-    new Date(),
-    data.event_date,
-    data.form_email,
-    data.receipt_required || "不要",
-    data.receipt_name || "",
-    data.line_user_id || "",
-    "未",
-    "未",
-    0,
-  ];
+  const row = EVENT_SCHEMA.map((col) => {
+    switch (col.key) {
+      case "timestamp":
+        return new Date();
+      case "event_date":
+        return data.event_date;
+      case "form_email":
+        return data.form_email;
+      case "receipt_required":
+        return data.receipt_required || "不要";
+      case "receipt_name":
+        return data.receipt_name || "";
+      case "line_user_id":
+        return data.line_user_id || "";
+      case "payment_status":
+        return "未";
+      case "attendance_status":
+        return "未";
+      case "receipt_dl_count":
+        return 0;
+      default:
+        return "";
+    }
+  });
 
   sheet.appendRow(row);
   const newRowIndex = sheet.getLastRow();
@@ -1234,10 +1271,33 @@ function ensureAllMasterHeaders_(sheet) {
   }
 
   const headerMap = getHeaderMap_(sheet);
-  MASTER_HEADERS.forEach((header) => {
-    if (headerMap[header] === undefined) {
+  MASTER_SCHEMA.forEach((col) => {
+    const hasLabel = headerMap[col.label] !== undefined;
+    const hasLegacy = headerMap[col.key] !== undefined;
+    if (!hasLabel && !hasLegacy) {
       const newCol = sheet.getLastColumn() + 1;
-      sheet.getRange(1, newCol).setValue(header);
+      sheet.getRange(1, newCol).setValue(col.label);
+    }
+  });
+}
+
+/**
+ * event_histories に不足しているヘッダー列を末尾に追加
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function ensureAllEventHeaders_(sheet) {
+  if (sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) {
+    sheet.getRange(1, 1, 1, EVENT_HEADERS.length).setValues([EVENT_HEADERS]);
+    return;
+  }
+
+  const headerMap = getHeaderMap_(sheet);
+  EVENT_SCHEMA.forEach((col) => {
+    const hasLabel = headerMap[col.label] !== undefined;
+    const hasLegacy = headerMap[col.key] !== undefined;
+    if (!hasLabel && !hasLegacy) {
+      const newCol = sheet.getLastColumn() + 1;
+      sheet.getRange(1, newCol).setValue(col.label);
     }
   });
 }
@@ -1436,14 +1496,24 @@ const FORM_FIELD_ALIASES = {
     "開催日",
     "event_date",
     "参加日",
+    "うおの会",
+    "参加する回",
   ],
-  user_name: ["氏名", "お名前", "名前", "user_name", "おなまえ"],
+  user_name: [
+    "氏名",
+    "お名前",
+    "名前",
+    "user_name",
+    "おなまえ",
+    "ネーム",
+  ],
   email: [
     "メールアドレス",
     "メール",
     "email",
     "Email",
     "Eメール",
+    "連絡先",
   ],
   company_name: ["会社名", "company_name", "御社名", "所属"],
   position_category: [
@@ -1461,6 +1531,7 @@ const FORM_FIELD_ALIASES = {
     "領収書の要不要",
     "receipt_required",
     "領収書希望",
+    "領収書は必要",
   ],
   receipt_name: ["領収書宛名", "receipt_name", "領収書の宛名"],
 };
@@ -1524,7 +1595,75 @@ function mapNamedValuesToPayload_(namedValues) {
       payload[fieldKey] = value;
     }
   });
+
+  if (!payload.user_name) {
+    payload.user_name = resolveUserNameFromForm_(namedValues);
+  }
+  if (!payload.email) {
+    payload.email = resolveEmailFromForm_(namedValues);
+  }
+  if (!payload.event_date) {
+    payload.event_date = resolveEventDateRawFromForm_(namedValues);
+  }
+
   return finalizeFormPayload_(payload);
+}
+
+/**
+ * @param {Object<string, string[]>} namedValues
+ * @returns {string}
+ */
+function resolveUserNameFromForm_(namedValues) {
+  const keys = Object.keys(namedValues);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (
+      key.indexOf("ふりがな") >= 0 ||
+      key.indexOf("フリガナ") >= 0 ||
+      key.indexOf("同意") >= 0
+    ) {
+      continue;
+    }
+    if (key.indexOf("名前") >= 0 || key.indexOf("氏名") >= 0) {
+      return String(namedValues[key][0] || "").trim();
+    }
+  }
+  return "";
+}
+
+/**
+ * @param {Object<string, string[]>} namedValues
+ * @returns {string}
+ */
+function resolveEmailFromForm_(namedValues) {
+  const keys = Object.keys(namedValues);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const value = String(namedValues[key][0] || "").trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      return value;
+    }
+  }
+  return "";
+}
+
+/**
+ * @param {Object<string, string[]>} namedValues
+ * @returns {string}
+ */
+function resolveEventDateRawFromForm_(namedValues) {
+  const keys = Object.keys(namedValues);
+  for (let i = 0; i < keys.length; i++) {
+    const value = String(namedValues[keys[i]][0] || "").trim();
+    if (
+      value.indexOf("うおの会") >= 0 ||
+      /\d{1,2}\/\d{1,2}/.test(value) ||
+      /\d{8}/.test(value)
+    ) {
+      return value;
+    }
+  }
+  return "";
 }
 
 /**
@@ -1607,8 +1746,21 @@ function finalizeFormPayload_(payload) {
   if (!payload.receipt_required) {
     payload.receipt_required = "不要";
   }
+  payload.receipt_required = normalizeReceiptRequired_(payload.receipt_required);
 
   return payload;
+}
+
+/**
+ * @param {*} value
+ * @returns {string}
+ */
+function normalizeReceiptRequired_(value) {
+  const v = String(value || "").trim();
+  if (v === "要" || v === "必要" || v === "はい" || v.toLowerCase() === "yes") {
+    return "要";
+  }
+  return "不要";
 }
 
 /**
@@ -1637,7 +1789,64 @@ function normalizeEventDate_(value) {
     return `${y}${m}${d}`;
   }
 
+  const mdMatch = str.match(/(\d{1,2})\/(\d{1,2})/);
+  if (mdMatch) {
+    const props = PropertiesService.getScriptProperties();
+    const year =
+      props.getProperty("DEFAULT_EVENT_YEAR") ||
+      String(new Date().getFullYear());
+    const m = String(mdMatch[1]).padStart(2, "0");
+    const d = String(mdMatch[2]).padStart(2, "0");
+    return `${year}${m}${d}`;
+  }
+
   throw new Error(`イベント日の形式が正しくありません: ${value}`);
+}
+
+/**
+ * 既存シートの英語ヘッダーを日本語に変換（1回実行）
+ */
+function migrateHeadersToJapanese() {
+  migrateSheetHeaders_(getSheet_(SHEET_MASTER), MASTER_SCHEMA);
+  migrateSheetHeaders_(getSheet_(SHEET_EVENTS), EVENT_SCHEMA);
+  Logger.log("ヘッダーを日本語に更新しました。");
+}
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object[]} schema
+ */
+function migrateSheetHeaders_(sheet, schema) {
+  const headerMap = getHeaderMap_(sheet);
+  schema.forEach((col) => {
+    if (headerMap[col.key] !== undefined) {
+      sheet.getRange(1, headerMap[col.key] + 1).setValue(col.label);
+    }
+  });
+}
+
+/**
+ * フォーム回答シートの全行を処理（未反映分の一括取り込み）
+ */
+function processAllFormResponses() {
+  const sheet = getFormResponseSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    Logger.log("フォーム回答がありません。");
+    return;
+  }
+
+  const results = [];
+  for (let row = 2; row <= lastRow; row++) {
+    try {
+      const payload = mapSheetRowToPayload_(sheet, row);
+      results.push({ row: row, result: handleEventApplication_(payload) });
+    } catch (error) {
+      results.push({ row: row, error: error.message || String(error) });
+    }
+  }
+  Logger.log(JSON.stringify(results, null, 2));
+  return results;
 }
 
 /**
@@ -1732,8 +1941,8 @@ function getFormResponseSheet_() {
  * スプレッドシートにヘッダー行を初期化
  */
 function setupSpreadsheetHeaders() {
-  ensureHeaders_(getSheet_(SHEET_MASTER), MASTER_HEADERS);
-  ensureHeaders_(getSheet_(SHEET_EVENTS), EVENT_HEADERS);
+  ensureAllMasterHeaders_(getSheet_(SHEET_MASTER));
+  ensureAllEventHeaders_(getSheet_(SHEET_EVENTS));
   Logger.log("ヘッダー行を初期化しました。");
 }
 
