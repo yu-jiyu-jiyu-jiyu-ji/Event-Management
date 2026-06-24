@@ -63,10 +63,60 @@
 | `SPREADSHEET_ID` | 対象スプレッドシート ID |
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE Messaging API トークン |
 | `LINE_ADMIN_USER_ID` | 通知先 userId（魚谷さん） |
+| `DEFAULT_EVENT_DATE` | （任意）フォームにイベント日がない場合の既定値 `20260707` |
+| `FORM_RESPONSE_SHEET_NAME` | （任意）回答シート名。未設定時は「フォームの回答」を自動検出 |
 
 4. スプレッドシートにシート `master_customers` / `event_histories` を作成
 5. エディタから `setupSpreadsheetHeaders()` を一度実行（ヘッダー自動作成）
 6. **デプロイ → 新しいデプロイ → ウェブアプリ**（アクセス: 全員）
+
+## Googleフォーム自動連携
+
+### 前提
+
+- Googleフォームの回答先を **同じスプレッドシート**（`SPREADSHEET_ID`）に設定する
+- GAS プロジェクトはそのスプレッドシートに **コンテナバインド** するか、Script Property で同じ ID を指定する
+
+### フォームの推奨設問名
+
+| 設問（タイトル） | 必須 | 備考 |
+|----------------|------|------|
+| 氏名 | ✅ | |
+| メールアドレス | ✅ | |
+| 参加希望日 | 推奨 | なければ `DEFAULT_EVENT_DATE` を使用 |
+| 会社名 | | |
+| 区分 | | 経営者/会社員 等 |
+| 役職 | | |
+| 電話番号 | | |
+| 紹介者 | | |
+| 領収書 | | 要/不要 |
+| 領収書宛名 | | |
+
+設問名は部分一致でも認識します（例: 「お名前」→ 氏名）。
+
+### セットアップ手順
+
+1. フォームの回答先を対象スプレッドシートにリンク
+2. GAS エディタで `installFormSubmitTrigger()` を **1回実行**（承認が必要）
+3. テスト送信 → `master_customers` と `event_histories` に行が追加されるか確認
+
+### 手動テスト
+
+- `processLatestFormResponse()` … 回答シートの **最終行** を処理（トリガーなしで試すとき）
+- `uninstallFormSubmitTrigger()` … トリガー削除
+
+### 処理内容（自動）
+
+```
+フォーム送信
+  → onFormSubmit トリガー
+  → handleEventApplication_（名寄せ）
+  → master_customers（新規のみ追加）
+  → event_histories（必ず追加・当日参加者リスト）
+  → LINE 通知（魚谷さん）
+```
+
+同一メール・同一イベント日の **重複申込はスキップ** されます。
 
 ## API: POST イベント申込
 
@@ -101,7 +151,7 @@ Content-Type: application/json
 
 ## 次のステップ
 
-- [ ] Googleフォーム → GAS トリガー連携
-- [ ] Vercel フロント（受付・管理画面）
-- [ ] LIFF 連携（当日受付・マスタ更新）
+- [x] Googleフォーム → GAS トリガー連携
+- [x] Vercel フロント（受付 LIFF）
+- [x] LIFF 連携（当日受付・マスタ更新）
 - [ ] pending_match 承認 UI

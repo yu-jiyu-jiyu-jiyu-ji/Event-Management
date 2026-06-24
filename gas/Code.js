@@ -867,6 +867,22 @@ function handleEventApplication_(payload) {
     });
   }
 
+  const existingEvent = findEventHistoryForCheckin_(eventSheet, {
+    eventDate: eventDate,
+    email: sanitized.email,
+  });
+  if (existingEvent) {
+    return {
+      ok: true,
+      duplicate: true,
+      pattern,
+      patternLabel: getPatternLabel_(pattern),
+      message: "同一メール・同一イベント日の申込が既に登録されています。",
+      customer: existingByEmail || masterRow || findCustomerByEmail_(masterSheet, sanitized.email),
+      eventHistory: existingEvent,
+    };
+  }
+
   const eventRow = appendEventHistory_(eventSheet, {
     event_date: eventDate,
     form_email: sanitized.email,
@@ -1406,6 +1422,306 @@ function requireString_(value, fieldName) {
     throw new Error(`${fieldName} は必須です。`);
   }
   return str;
+}
+
+// =============================================================================
+// Googleフォーム連携
+// =============================================================================
+
+/** フォーム設問タイトル → payload キーのエイリアス */
+const FORM_FIELD_ALIASES = {
+  event_date: [
+    "参加希望日",
+    "イベント日",
+    "開催日",
+    "event_date",
+    "参加日",
+  ],
+  user_name: ["氏名", "お名前", "名前", "user_name", "おなまえ"],
+  email: [
+    "メールアドレス",
+    "メール",
+    "email",
+    "Email",
+    "Eメール",
+  ],
+  company_name: ["会社名", "company_name", "御社名", "所属"],
+  position_category: [
+    "区分",
+    "立場",
+    "position_category",
+    "職種",
+    "属性",
+  ],
+  position_name: ["役職", "役職名", "position_name", "肩書き"],
+  phone_number: ["電話番号", "電話", "phone_number", "携帯番号"],
+  referrer: ["紹介者", "referrer", "ご紹介者", "紹介者名"],
+  receipt_required: [
+    "領収書",
+    "領収書の要不要",
+    "receipt_required",
+    "領収書希望",
+  ],
+  receipt_name: ["領収書宛名", "receipt_name", "領収書の宛名"],
+};
+
+/**
+ * フォーム送信時トリガー（スプレッドシート連携フォーム用）
+ * @param {Object} e
+ */
+function onFormSubmit(e) {
+  try {
+    const payload = parseFormSubmitToPayload_(e);
+    const result = handleEventApplication_(payload);
+    Logger.log(
+      "フォーム申込処理完了: " + JSON.stringify(result, null, 2),
+    );
+  } catch (error) {
+    console.error(error);
+    sendLineNotification_(
+      [
+        "【うおの会】⚠️ フォーム処理エラー",
+        "",
+        error.message || String(error),
+        "",
+        "フォーム回答シートの設問名・必須項目をご確認ください。",
+      ].join("\n"),
+    );
+    throw error;
+  }
+}
+
+/**
+ * フォーム送信イベントを event_application payload に変換
+ * @param {Object} e
+ * @returns {Object}
+ */
+function parseFormSubmitToPayload_(e) {
+  if (!e) {
+    throw new Error("フォーム送信イベントが空です。");
+  }
+
+  if (e.namedValues) {
+    return mapNamedValuesToPayload_(e.namedValues);
+  }
+
+  if (e.range) {
+    return mapSheetRowToPayload_(e.range.getSheet(), e.range.getRow());
+  }
+
+  throw new Error("フォーム回答データを取得できませんでした。");
+}
+
+/**
+ * @param {Object<string, string[]>} namedValues
+ * @returns {Object}
+ */
+function mapNamedValuesToPayload_(namedValues) {
+  const payload = {};
+  Object.keys(FORM_FIELD_ALIASES).forEach((fieldKey) => {
+    const value = resolveFormField_(namedValues, FORM_FIELD_ALIASES[fieldKey]);
+    if (value !== "") {
+      payload[fieldKey] = value;
+    }
+  });
+  return finalizeFormPayload_(payload);
+}
+
+/**
+ * 回答シートの1行から payload を生成
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} rowIndex
+ * @returns {Object}
+ */
+function mapSheetRowToPayload_(sheet, rowIndex) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet
+    .getRange(1, 1, 1, lastCol)
+    .getValues()[0]
+    .map((h) => String(h || "").trim());
+  const values = sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
+
+  const namedValues = {};
+  headers.forEach((header, index) => {
+    if (header) {
+      namedValues[header] = [String(values[index] || "")];
+    }
+  });
+
+  return mapNamedValuesToPayload_(namedValues);
+}
+
+/**
+ * @param {Object<string, string[]>} namedValues
+ * @param {string[]} aliases
+ * @returns {string}
+ */
+function resolveFormField_(namedValues, aliases) {
+  for (let i = 0; i < aliases.length; i++) {
+    const alias = aliases[i];
+    if (namedValues[alias] && namedValues[alias][0] !== undefined) {
+      return String(namedValues[alias][0]).trim();
+    }
+  }
+
+  const keys = Object.keys(namedValues);
+  for (let i = 0; i < aliases.length; i++) {
+    const alias = aliases[i].toLowerCase();
+    for (let j = 0; j < keys.length; j++) {
+      const key = keys[j];
+      if (key.toLowerCase().indexOf(alias) >= 0) {
+        return String(namedValues[key][0] || "").trim();
+      }
+    }
+  }
+
+  return "";
+}
+
+/**
+ * @param {Object} payload
+ * @returns {Object}
+ */
+function finalizeFormPayload_(payload) {
+  const props = PropertiesService.getScriptProperties();
+
+  if (!payload.event_date) {
+    const defaultDate =
+      props.getProperty("DEFAULT_EVENT_DATE") ||
+      props.getProperty("FORM_EVENT_DATE") ||
+      "";
+    if (defaultDate) {
+      payload.event_date = defaultDate;
+    }
+  }
+
+  payload.event_date = normalizeEventDate_(payload.event_date);
+
+  if (!payload.user_name) {
+    throw new Error("フォームに「氏名」が見つかりません。");
+  }
+  if (!payload.email) {
+    throw new Error("フォームに「メールアドレス」が見つかりません。");
+  }
+
+  if (!payload.receipt_required) {
+    payload.receipt_required = "不要";
+  }
+
+  return payload;
+}
+
+/**
+ * イベント日を YYYYMMDD 形式に正規化
+ * @param {*} value
+ * @returns {string}
+ */
+function normalizeEventDate_(value) {
+  const str = String(value || "").trim();
+  if (!str) {
+    throw new Error(
+      "イベント日が未設定です。フォームに「参加希望日」を追加するか、Script Property DEFAULT_EVENT_DATE を設定してください。",
+    );
+  }
+
+  const digits = toHalfWidth_(str).replace(/[^\d]/g, "");
+  if (digits.length === 8) {
+    return digits;
+  }
+
+  const match = str.match(/(\d{4})[年\/\-.](\d{1,2})[月\/\-.](\d{1,2})/);
+  if (match) {
+    const y = match[1];
+    const m = String(match[2]).padStart(2, "0");
+    const d = String(match[3]).padStart(2, "0");
+    return `${y}${m}${d}`;
+  }
+
+  throw new Error(`イベント日の形式が正しくありません: ${value}`);
+}
+
+/**
+ * フォーム送信トリガーをインストール（GAS エディタから1回実行）
+ */
+function installFormSubmitTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const exists = triggers.some(
+    (trigger) => trigger.getHandlerFunction() === "onFormSubmit",
+  );
+  if (exists) {
+    Logger.log("onFormSubmit トリガーは既に設定済みです。");
+    return;
+  }
+
+  ScriptApp.newTrigger("onFormSubmit")
+    .forSpreadsheet(getSpreadsheet_())
+    .onFormSubmit()
+    .create();
+
+  Logger.log("onFormSubmit トリガーをインストールしました。");
+}
+
+/**
+ * フォーム送信トリガーを削除
+ */
+function uninstallFormSubmitTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  let removed = 0;
+  triggers.forEach((trigger) => {
+    if (trigger.getHandlerFunction() === "onFormSubmit") {
+      ScriptApp.deleteTrigger(trigger);
+      removed++;
+    }
+  });
+  Logger.log(`onFormSubmit トリガーを ${removed} 件削除しました。`);
+}
+
+/**
+ * 回答シートの最終行を手動処理（テスト・再処理用）
+ */
+function processLatestFormResponse() {
+  const sheet = getFormResponseSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    throw new Error("フォーム回答がありません。");
+  }
+  const payload = mapSheetRowToPayload_(sheet, lastRow);
+  const result = handleEventApplication_(payload);
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * フォーム回答シートを取得
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function getFormResponseSheet_() {
+  const props = PropertiesService.getScriptProperties();
+  const sheetName = props.getProperty("FORM_RESPONSE_SHEET_NAME");
+  const spreadsheet = getSpreadsheet_();
+
+  if (sheetName) {
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) {
+      throw new Error(`フォーム回答シート "${sheetName}" が見つかりません。`);
+    }
+    return sheet;
+  }
+
+  const sheets = spreadsheet.getSheets();
+  for (let i = 0; i < sheets.length; i++) {
+    const name = sheets[i].getName();
+    if (
+      name.indexOf("フォームの回答") >= 0 ||
+      name.indexOf("Form Responses") >= 0
+    ) {
+      return sheets[i];
+    }
+  }
+
+  throw new Error(
+    "フォーム回答シートが見つかりません。Script Property FORM_RESPONSE_SHEET_NAME を設定してください。",
+  );
 }
 
 // =============================================================================
