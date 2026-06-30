@@ -44,13 +44,15 @@
 |----|-----------|------|
 | A | timestamp | |
 | B | event_date | 例: 20260707 |
-| C | form_email | マスタ突合キー |
-| D | receipt_required | 要/不要 |
-| E | receipt_name | |
-| F | line_user_id | 受付時紐付け |
-| G | payment_status | 初期値「未」 |
-| H | attendance_status | 初期値「未」 |
-| I | receipt_dl_count | 初期値 0 |
+| C | user_name | 申込時の氏名 |
+| D | name_reading | 申込時の読み方 |
+| E | form_email | マスタ突合キー |
+| F | receipt_required | 要/不要 |
+| G | receipt_name | |
+| H | line_user_id | 受付時紐付け |
+| I | payment_status | 初期値「未」 |
+| J | attendance_status | 初期値「未」 |
+| K | receipt_dl_count | 初期値 0 |
 
 ## GAS セットアップ
 
@@ -63,7 +65,6 @@
 | `SPREADSHEET_ID` | 対象スプレッドシート ID |
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE Messaging API トークン |
 | `LINE_ADMIN_USER_ID` | 通知先 userId（魚谷さん） |
-| `DEFAULT_EVENT_DATE` | （任意）フォームにイベント日がない場合の既定値 `20260707` |
 | `FORM_RESPONSE_SHEET_NAME` | （任意）回答シート名。未設定時は「フォームの回答」を自動検出 |
 
 4. スプレッドシートにシート `master_customers` / `event_histories` を作成
@@ -82,8 +83,9 @@
 | 設問（タイトル） | 必須 | 備考 |
 |----------------|------|------|
 | 氏名 | ✅ | |
+| 読み方 | 推奨 | event_histories に保存 |
 | メールアドレス | ✅ | |
-| 参加希望日 | 推奨 | なければ `DEFAULT_EVENT_DATE` を使用 |
+| 参加イベント | ✅ | 例: `【受付中】7/7(火) 19:00~ うおの会` → `20260707` |
 | 会社名 | | |
 | 区分 | | 経営者/会社員 等 |
 | 役職 | | |

@@ -9,6 +9,9 @@
  * 【スプレッドシート】
  * - シート名 master_customers  : 顧客マスタ
  * - シート名 event_histories    : イベント参加履歴
+ *
+ * 【重要】スプレッドシート → 拡張機能 → Apps Script に Code.js をすべて貼り付け
+ * 初回は runFullFormSync() を1回実行
  */
 
 // =============================================================================
@@ -48,6 +51,8 @@ const MASTER_SCHEMA = [
 const EVENT_SCHEMA = [
   { key: "timestamp", label: "記録日時" },
   { key: "event_date", label: "イベント日" },
+  { key: "user_name", label: "氏名" },
+  { key: "name_reading", label: "読み方" },
   { key: "form_email", label: "申込メール" },
   { key: "receipt_required", label: "領収書" },
   { key: "receipt_name", label: "領収書宛名" },
@@ -70,14 +75,30 @@ const COLUMN_LABEL_TO_KEY_ = (function buildColumnMaps_() {
   return map;
 })();
 
+function getSchemaForSheet_(sheet) {
+  const name = sheet.getName();
+  if (name === SHEET_EVENTS) {
+    return EVENT_SCHEMA;
+  }
+  if (name === SHEET_MASTER) {
+    return MASTER_SCHEMA;
+  }
+  return null;
+}
+
 /**
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {string} key
+ * @param {Object[]|null} [schemaOpt]
  * @returns {number|undefined}
  */
-function getColumnIndexForKey_(sheet, key) {
+function getColumnIndexForKey_(sheet, key, schemaOpt) {
   const headerMap = getHeaderMap_(sheet);
-  const schemaCol = MASTER_SCHEMA.concat(EVENT_SCHEMA).find((c) => c.key === key);
+  const schema =
+    schemaOpt ||
+    getSchemaForSheet_(sheet) ||
+    MASTER_SCHEMA.concat(EVENT_SCHEMA);
+  const schemaCol = schema.find((c) => c.key === key);
   if (schemaCol && headerMap[schemaCol.label] !== undefined) {
     return headerMap[schemaCol.label];
   }
@@ -359,6 +380,9 @@ function findEventParticipantsByName_(eventSheet, masterIndex, eventDate, userNa
  * @returns {string}
  */
 function getParticipantDisplayName_(event, customer) {
+  if (event.user_name) {
+    return sanitizeUserName_(event.user_name);
+  }
   if (customer && customer.user_name) {
     return sanitizeUserName_(customer.user_name);
   }
@@ -512,6 +536,8 @@ function handleCheckinLinkEmail_(payload) {
   if (!eventHistory) {
     eventHistory = appendEventHistory_(eventSheet, {
       event_date: eventDate,
+      user_name: customer.user_name || "",
+      name_reading: "",
       form_email: email,
       receipt_required: "不要",
       receipt_name: "",
@@ -589,6 +615,8 @@ function handleCheckinComplete_(payload) {
   if (!eventHistory) {
     eventHistory = appendEventHistory_(eventSheet, {
       event_date: eventDate,
+      user_name: customer.user_name || "",
+      name_reading: "",
       form_email: customer.email,
       receipt_required: "不要",
       receipt_name: "",
@@ -689,7 +717,11 @@ function loadMasterIndex_(masterSheet) {
     return { byLineId, byEmail };
   }
 
-  const values = masterSheet.getRange(2, 1, lastRow, lastCol).getValues();
+  const numRows = lastRow - 1;
+  if (numRows < 1) {
+    return { byLineId, byEmail };
+  }
+  const values = masterSheet.getRange(2, 1, numRows, lastCol).getValues();
   for (let i = 0; i < values.length; i++) {
     const obj = rowValuesToObject_(headerMap, values[i], i + 2);
     const lineId = String(obj.line_user_id || "").trim();
@@ -719,7 +751,11 @@ function loadEventRowsForDate_(eventSheet, eventDate) {
     return [];
   }
 
-  const values = eventSheet.getRange(2, 1, lastRow, lastCol).getValues();
+  const numRows = lastRow - 1;
+  if (numRows < 1) {
+    return [];
+  }
+  const values = eventSheet.getRange(2, 1, numRows, lastCol).getValues();
   const rows = [];
   for (let i = 0; i < values.length; i++) {
     const obj = rowValuesToObject_(headerMap, values[i], i + 2);
@@ -798,6 +834,8 @@ function serializeCustomer_(customer) {
 function serializeEvent_(event) {
   return {
     event_date: String(event.event_date || ""),
+    user_name: event.user_name || "",
+    name_reading: event.name_reading || "",
     form_email: event.form_email || "",
     attendance_status: String(event.attendance_status || ""),
     payment_status: String(event.payment_status || ""),
@@ -856,72 +894,74 @@ function handleEventApplication_(payload) {
   const masterSheet = getSheet_(SHEET_MASTER);
   const eventSheet = getSheet_(SHEET_EVENTS);
 
+  ensureAllEventHeaders_(eventSheet);
+  ensureAllMasterHeaders_(masterSheet);
+
+  const data = {
+    user_name: sanitized.user_name,
+    name_reading: sanitized.name_reading || "",
+    email: sanitized.email,
+    event_date: eventDate,
+    receipt_required: sanitized.receipt_required,
+    receipt_name: sanitized.receipt_name || "",
+  };
+
   const existingByEmail = findCustomerByEmail_(masterSheet, sanitized.email);
   const existingByName = findCustomersByName_(masterSheet, sanitized.user_name);
 
   let pattern;
-  let masterRow = null;
+  let masterRow = existingByEmail;
 
   if (existingByEmail) {
-    // 【パターンA】メール完全一致 → 既存顧客。マスタは更新しない
     pattern = MatchPattern.EXISTING_EMAIL;
   } else if (existingByName.length > 0) {
-    // 【パターンB】氏名一致・メール不一致 → 承認待ちでマスタ追加
     pattern = MatchPattern.PENDING_NAME;
-    masterRow = appendMasterCustomer_(masterSheet, {
-      line_user_id: sanitized.line_user_id || "",
-      line_display_name: "",
-      user_name: sanitized.user_name,
-      company_name: sanitized.company_name,
-      position_category: sanitized.position_category,
-      position_name: sanitized.position_name,
-      email: sanitized.email,
-      phone_number: sanitized.phone_number,
-      referrer: sanitized.referrer,
+    masterRow = writeMasterRow_(masterSheet, Object.assign({}, data, {
+      referrer: sanitized.referrer || "フォーム申込",
+    }));
+    updateMasterFields_(masterSheet, masterRow._rowIndex, {
       status: CustomerStatus.PENDING_MATCH,
-    });
-  } else {
-    // 【パターンC】完全新規
-    pattern = MatchPattern.NEW_CUSTOMER;
-    masterRow = appendMasterCustomer_(masterSheet, {
-      line_user_id: sanitized.line_user_id || "",
-      line_display_name: "",
-      user_name: sanitized.user_name,
       company_name: sanitized.company_name,
       position_category: sanitized.position_category,
       position_name: sanitized.position_name,
-      email: sanitized.email,
       phone_number: sanitized.phone_number,
       referrer: sanitized.referrer,
-      status: CustomerStatus.ACTIVE,
     });
+    masterRow = rowToObject_(masterSheet, masterRow._rowIndex);
+  } else {
+    pattern = MatchPattern.NEW_CUSTOMER;
+    masterRow = writeMasterRow_(masterSheet, data);
+    if (sanitized.company_name || sanitized.phone_number || sanitized.referrer) {
+      updateMasterFields_(masterSheet, masterRow._rowIndex, {
+        company_name: sanitized.company_name,
+        position_category: sanitized.position_category,
+        position_name: sanitized.position_name,
+        phone_number: sanitized.phone_number,
+        referrer: sanitized.referrer || "フォーム申込",
+      });
+      masterRow = rowToObject_(masterSheet, masterRow._rowIndex);
+    }
   }
 
-  const existingEvent = findEventHistoryForCheckin_(eventSheet, {
-    eventDate: eventDate,
-    email: sanitized.email,
-  });
+  const existingEvent = findEventByEmailAndDate_(
+    eventSheet,
+    sanitized.email,
+    eventDate,
+  );
+  let eventRow;
+  let duplicate = false;
+
   if (existingEvent) {
-    return {
-      ok: true,
-      duplicate: true,
-      pattern,
-      patternLabel: getPatternLabel_(pattern),
-      message: "同一メール・同一イベント日の申込が既に登録されています。",
-      customer: existingByEmail || masterRow || findCustomerByEmail_(masterSheet, sanitized.email),
-      eventHistory: existingEvent,
-    };
+    duplicate = true;
+    fillEmptyEventCells_(eventSheet, existingEvent._rowIndex, data);
+    eventRow = rowToObject_(eventSheet, existingEvent._rowIndex);
+  } else {
+    eventRow = writeEventRow_(eventSheet, Object.assign({}, data, {
+      line_user_id: existingByEmail ? existingByEmail.line_user_id : sanitized.line_user_id || "",
+    }));
   }
 
-  const eventRow = appendEventHistory_(eventSheet, {
-    event_date: eventDate,
-    form_email: sanitized.email,
-    receipt_required: sanitized.receipt_required,
-    receipt_name: sanitized.receipt_name,
-    line_user_id: existingByEmail
-      ? existingByEmail.line_user_id
-      : sanitized.line_user_id || "",
-  });
+  SpreadsheetApp.flush();
 
   const notificationPayload = buildNotificationMessage_({
     pattern,
@@ -967,6 +1007,7 @@ function sanitizeApplicationInput_(payload) {
   return {
     line_user_id: String(payload.line_user_id || "").trim(),
     user_name: sanitizeUserName_(payload.user_name),
+    name_reading: sanitizeNameReading_(payload.name_reading),
     company_name: String(payload.company_name || "").trim(),
     position_category: String(payload.position_category || "").trim(),
     position_name: String(payload.position_name || "").trim(),
@@ -987,6 +1028,15 @@ function sanitizeUserName_(name) {
   return toHalfWidth_(String(name || ""))
     .replace(/[\s\u3000]+/g, "")
     .trim();
+}
+
+/**
+ * 読み方：半角化のみ（スペース・かなは保持）
+ * @param {string} reading
+ * @returns {string}
+ */
+function sanitizeNameReading_(reading) {
+  return toHalfWidth_(String(reading || "")).trim();
 }
 
 /**
@@ -1046,10 +1096,33 @@ function toHalfWidth_(str) {
  */
 function getSpreadsheet_() {
   const id = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
-  if (!id) {
-    throw new Error("Script Property SPREADSHEET_ID が未設定です。");
+  if (id) {
+    return SpreadsheetApp.openById(id);
   }
-  return SpreadsheetApp.openById(id);
+  try {
+    const active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) {
+      return active;
+    }
+  } catch (error) {
+  }
+  throw new Error(
+    "Script Property SPREADSHEET_ID が未設定です。スプレッドシートに紐づく GAS から実行するか、ID を設定してください。",
+  );
+}
+
+/**
+ * 1行分のセル値を取得
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} rowIndex 1始まり
+ * @returns {*[]}
+ */
+function getRowValues_(sheet, rowIndex) {
+  const lastCol = sheet.getLastColumn();
+  if (lastCol < 1) {
+    return [];
+  }
+  return sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
 }
 
 /**
@@ -1107,8 +1180,7 @@ function getHeaderMap_(sheet) {
  */
 function rowToObject_(sheet, rowIndex) {
   const headerMap = getHeaderMap_(sheet);
-  const lastCol = sheet.getLastColumn();
-  const values = sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
+  const values = getRowValues_(sheet, rowIndex);
   const obj = { _rowIndex: rowIndex };
   Object.keys(headerMap).forEach((header) => {
     const key = COLUMN_LABEL_TO_KEY_[header] || header;
@@ -1134,11 +1206,11 @@ function findCustomerByEmail_(sheet, email) {
     return null;
   }
 
-  const emails = sheet.getRange(2, emailCol + 1, lastRow - 1, 1).getValues();
-  for (let i = 0; i < emails.length; i++) {
-    const cellEmail = sanitizeEmailSafe_(emails[i][0]);
+  for (let row = 2; row <= lastRow; row++) {
+    const values = getRowValues_(sheet, row);
+    const cellEmail = sanitizeEmailSafe_(values[emailCol]);
     if (cellEmail && cellEmail === email) {
-      return rowToObject_(sheet, i + 2);
+      return rowToObject_(sheet, row);
     }
   }
   return null;
@@ -1161,12 +1233,12 @@ function findCustomersByName_(sheet, userName) {
     return [];
   }
 
-  const names = sheet.getRange(2, nameCol + 1, lastRow - 1, 1).getValues();
   const matches = [];
-  for (let i = 0; i < names.length; i++) {
-    const cellName = sanitizeUserName_(names[i][0]);
+  for (let row = 2; row <= lastRow; row++) {
+    const values = getRowValues_(sheet, row);
+    const cellName = sanitizeUserName_(values[nameCol]);
     if (cellName && cellName === userName) {
-      matches.push(rowToObject_(sheet, i + 2));
+      matches.push(rowToObject_(sheet, row));
     }
   }
   return matches;
@@ -1189,6 +1261,46 @@ function sanitizeEmailSafe_(value) {
 }
 
 /**
+ * スキーマのキーに対応する列へ1行分を書き込む（列順ズレ防止）
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object[]} schema
+ * @param {Object} values
+ * @returns {number} 書き込んだ行番号
+ */
+function appendRowBySchema_(sheet, schema, values) {
+  const rowIndex = Math.max(sheet.getLastRow(), 1) + 1;
+
+  schema.forEach((col) => {
+    if (values[col.key] === undefined) {
+      return;
+    }
+    let colIdx = getColumnIndexForKey_(sheet, col.key, schema);
+    if (colIdx === undefined) {
+      colIdx = sheet.getLastColumn();
+      sheet.getRange(1, colIdx + 1).setValue(col.label);
+    }
+    sheet.getRange(rowIndex, colIdx + 1).setValue(values[col.key]);
+  });
+
+  return rowIndex;
+}
+
+/**
+ * 列が無ければ末尾にヘッダーを追加
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object} col
+ * @returns {number} 列インデックス（0始まり）
+ */
+function ensureColumnForKey_(sheet, col) {
+  let colIdx = getColumnIndexForKey_(sheet, col.key);
+  if (colIdx === undefined) {
+    colIdx = sheet.getLastColumn();
+    sheet.getRange(1, colIdx + 1).setValue(col.label);
+  }
+  return colIdx;
+}
+
+/**
  * 顧客マスタに1行追加
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  * @param {Object} data
@@ -1197,15 +1309,21 @@ function sanitizeEmailSafe_(value) {
 function appendMasterCustomer_(sheet, data) {
   ensureAllMasterHeaders_(sheet);
 
-  const row = MASTER_SCHEMA.map((col) => {
-    if (col.key === "created_at") {
-      return new Date();
-    }
-    return data[col.key] !== undefined ? data[col.key] : "";
-  });
+  const values = {
+    line_user_id: data.line_user_id || "",
+    line_display_name: data.line_display_name || "",
+    user_name: data.user_name || "",
+    company_name: data.company_name || "",
+    position_category: data.position_category || "",
+    position_name: data.position_name || "",
+    email: data.email || "",
+    phone_number: data.phone_number || "",
+    referrer: data.referrer || "",
+    status: data.status || CustomerStatus.ACTIVE,
+    created_at: new Date(),
+  };
 
-  sheet.appendRow(row);
-  const newRowIndex = sheet.getLastRow();
+  const newRowIndex = appendRowBySchema_(sheet, MASTER_SCHEMA, values);
   return rowToObject_(sheet, newRowIndex);
 }
 
@@ -1218,33 +1336,21 @@ function appendMasterCustomer_(sheet, data) {
 function appendEventHistory_(sheet, data) {
   ensureAllEventHeaders_(sheet);
 
-  const row = EVENT_SCHEMA.map((col) => {
-    switch (col.key) {
-      case "timestamp":
-        return new Date();
-      case "event_date":
-        return data.event_date;
-      case "form_email":
-        return data.form_email;
-      case "receipt_required":
-        return data.receipt_required || "不要";
-      case "receipt_name":
-        return data.receipt_name || "";
-      case "line_user_id":
-        return data.line_user_id || "";
-      case "payment_status":
-        return "未";
-      case "attendance_status":
-        return "未";
-      case "receipt_dl_count":
-        return 0;
-      default:
-        return "";
-    }
-  });
+  const values = {
+    timestamp: new Date(),
+    event_date: data.event_date,
+    user_name: data.user_name || "",
+    name_reading: data.name_reading || "",
+    form_email: data.form_email,
+    receipt_required: data.receipt_required || "不要",
+    receipt_name: data.receipt_name || "",
+    line_user_id: data.line_user_id || "",
+    payment_status: "未",
+    attendance_status: "未",
+    receipt_dl_count: 0,
+  };
 
-  sheet.appendRow(row);
-  const newRowIndex = sheet.getLastRow();
+  const newRowIndex = appendRowBySchema_(sheet, EVENT_SCHEMA, values);
   return rowToObject_(sheet, newRowIndex);
 }
 
@@ -1370,6 +1476,7 @@ function buildNotificationMessage_(ctx) {
     "",
     "■ 申込内容",
     `氏名: ${ctx.sanitized.user_name}`,
+    `読み方: ${ctx.sanitized.name_reading || "—"}`,
     `メール: ${ctx.sanitized.email}`,
     `会社: ${ctx.sanitized.company_name || "—"}`,
     `区分: ${ctx.sanitized.position_category || "—"}`,
@@ -1498,6 +1605,7 @@ const FORM_FIELD_ALIASES = {
     "参加日",
     "うおの会",
     "参加する回",
+    "参加イベント",
   ],
   user_name: [
     "氏名",
@@ -1506,6 +1614,14 @@ const FORM_FIELD_ALIASES = {
     "user_name",
     "おなまえ",
     "ネーム",
+  ],
+  name_reading: [
+    "読み方",
+    "ふりがな",
+    "フリガナ",
+    "よみがな",
+    "name_reading",
+    "お名前（ふりがな）",
   ],
   email: [
     "メールアドレス",
@@ -1529,381 +1645,386 @@ const FORM_FIELD_ALIASES = {
   receipt_required: [
     "領収書",
     "領収書の要不要",
+    "領収書の有無",
     "receipt_required",
     "領収書希望",
     "領収書は必要",
   ],
-  receipt_name: ["領収書宛名", "receipt_name", "領収書の宛名"],
+  receipt_name: [
+    "領収書宛名",
+    "receipt_name",
+    "領収書の宛名",
+  ],
 };
 
 /**
- * フォーム送信時トリガー（スプレッドシート連携フォーム用）
- * @param {Object} e
+ * =============================================================================
+ * フォーム → スプレッドシート転記（シンプル版）
+ * =============================================================================
+ *
+ * 【やること】フォーム回答1行を読み取り、2シートに書く
+ *   - event_histories  … 毎回追加（参加者リスト）
+ *   - master_customers … 新規メールの人だけ追加
+ *
+ * 【初回】GASエディタで runFullFormSync() を1回実行
+ * 【以降】フォーム送信で onFormSubmit が自動実行
+ * 【手動】processAllFormResponses() または スプレッドシートメニュー「うおの会」
  */
+
+// =============================================================================
+// エントリポイント
+// =============================================================================
+
+/** フォーム送信トリガー（関数: onFormSubmit / イベント: フォーム送信時） */
 function onFormSubmit(e) {
-  try {
-    const payload = parseFormSubmitToPayload_(e);
-    const result = handleEventApplication_(payload);
-    Logger.log(
-      "フォーム申込処理完了: " + JSON.stringify(result, null, 2),
-    );
-  } catch (error) {
-    console.error(error);
-    sendLineNotification_(
-      [
-        "【うおの会】⚠️ フォーム処理エラー",
-        "",
-        error.message || String(error),
-        "",
-        "フォーム回答シートの設問名・必須項目をご確認ください。",
-      ].join("\n"),
-    );
-    throw error;
-  }
+  transferFormResponse_(e);
 }
 
-/**
- * フォーム送信イベントを event_application payload に変換
- * @param {Object} e
- * @returns {Object}
- */
-function parseFormSubmitToPayload_(e) {
-  if (!e) {
-    throw new Error("フォーム送信イベントが空です。");
-  }
-
-  if (e.namedValues) {
-    return mapNamedValuesToPayload_(e.namedValues);
-  }
-
-  if (e.range) {
-    return mapSheetRowToPayload_(e.range.getSheet(), e.range.getRow());
-  }
-
-  throw new Error("フォーム回答データを取得できませんでした。");
+/** 初回セットアップ＋全行転記 */
+function runFullFormSync() {
+  setupSpreadsheetHeaders();
+  reinstallFormSubmitTrigger();
+  return processAllFormResponses();
 }
 
-/**
- * @param {Object<string, string[]>} namedValues
- * @returns {Object}
- */
-function mapNamedValuesToPayload_(namedValues) {
-  const payload = {};
-  Object.keys(FORM_FIELD_ALIASES).forEach((fieldKey) => {
-    const value = resolveFormField_(namedValues, FORM_FIELD_ALIASES[fieldKey]);
-    if (value !== "") {
-      payload[fieldKey] = value;
-    }
-  });
-
-  if (!payload.user_name) {
-    payload.user_name = resolveUserNameFromForm_(namedValues);
-  }
-  if (!payload.email) {
-    payload.email = resolveEmailFromForm_(namedValues);
-  }
-  if (!payload.event_date) {
-    payload.event_date = resolveEventDateRawFromForm_(namedValues);
-  }
-
-  return finalizeFormPayload_(payload);
-}
-
-/**
- * @param {Object<string, string[]>} namedValues
- * @returns {string}
- */
-function resolveUserNameFromForm_(namedValues) {
-  const keys = Object.keys(namedValues);
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i];
-    if (
-      key.indexOf("ふりがな") >= 0 ||
-      key.indexOf("フリガナ") >= 0 ||
-      key.indexOf("同意") >= 0
-    ) {
-      continue;
-    }
-    if (key.indexOf("名前") >= 0 || key.indexOf("氏名") >= 0) {
-      return String(namedValues[key][0] || "").trim();
-    }
-  }
-  return "";
-}
-
-/**
- * @param {Object<string, string[]>} namedValues
- * @returns {string}
- */
-function resolveEmailFromForm_(namedValues) {
-  const keys = Object.keys(namedValues);
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i];
-    const value = String(namedValues[key][0] || "").trim();
-    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      return value;
-    }
-  }
-  return "";
-}
-
-/**
- * @param {Object<string, string[]>} namedValues
- * @returns {string}
- */
-function resolveEventDateRawFromForm_(namedValues) {
-  const keys = Object.keys(namedValues);
-  for (let i = 0; i < keys.length; i++) {
-    const value = String(namedValues[keys[i]][0] || "").trim();
-    if (
-      value.indexOf("うおの会") >= 0 ||
-      /\d{1,2}\/\d{1,2}/.test(value) ||
-      /\d{8}/.test(value)
-    ) {
-      return value;
-    }
-  }
-  return "";
-}
-
-/**
- * 回答シートの1行から payload を生成
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {number} rowIndex
- * @returns {Object}
- */
-function mapSheetRowToPayload_(sheet, rowIndex) {
-  const lastCol = sheet.getLastColumn();
-  const headers = sheet
-    .getRange(1, 1, 1, lastCol)
-    .getValues()[0]
-    .map((h) => String(h || "").trim());
-  const values = sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
-
-  const namedValues = {};
-  headers.forEach((header, index) => {
-    if (header) {
-      namedValues[header] = [String(values[index] || "")];
-    }
-  });
-
-  return mapNamedValuesToPayload_(namedValues);
-}
-
-/**
- * @param {Object<string, string[]>} namedValues
- * @param {string[]} aliases
- * @returns {string}
- */
-function resolveFormField_(namedValues, aliases) {
-  for (let i = 0; i < aliases.length; i++) {
-    const alias = aliases[i];
-    if (namedValues[alias] && namedValues[alias][0] !== undefined) {
-      return String(namedValues[alias][0]).trim();
-    }
-  }
-
-  const keys = Object.keys(namedValues);
-  for (let i = 0; i < aliases.length; i++) {
-    const alias = aliases[i].toLowerCase();
-    for (let j = 0; j < keys.length; j++) {
-      const key = keys[j];
-      if (key.toLowerCase().indexOf(alias) >= 0) {
-        return String(namedValues[key][0] || "").trim();
-      }
-    }
-  }
-
-  return "";
-}
-
-/**
- * @param {Object} payload
- * @returns {Object}
- */
-function finalizeFormPayload_(payload) {
-  const props = PropertiesService.getScriptProperties();
-
-  if (!payload.event_date) {
-    const defaultDate =
-      props.getProperty("DEFAULT_EVENT_DATE") ||
-      props.getProperty("FORM_EVENT_DATE") ||
-      "";
-    if (defaultDate) {
-      payload.event_date = defaultDate;
-    }
-  }
-
-  payload.event_date = normalizeEventDate_(payload.event_date);
-
-  if (!payload.user_name) {
-    throw new Error("フォームに「氏名」が見つかりません。");
-  }
-  if (!payload.email) {
-    throw new Error("フォームに「メールアドレス」が見つかりません。");
-  }
-
-  if (!payload.receipt_required) {
-    payload.receipt_required = "不要";
-  }
-  payload.receipt_required = normalizeReceiptRequired_(payload.receipt_required);
-
-  return payload;
-}
-
-/**
- * @param {*} value
- * @returns {string}
- */
-function normalizeReceiptRequired_(value) {
-  const v = String(value || "").trim();
-  if (v === "要" || v === "必要" || v === "はい" || v.toLowerCase() === "yes") {
-    return "要";
-  }
-  return "不要";
-}
-
-/**
- * イベント日を YYYYMMDD 形式に正規化
- * @param {*} value
- * @returns {string}
- */
-function normalizeEventDate_(value) {
-  const str = String(value || "").trim();
-  if (!str) {
-    throw new Error(
-      "イベント日が未設定です。フォームに「参加希望日」を追加するか、Script Property DEFAULT_EVENT_DATE を設定してください。",
-    );
-  }
-
-  const digits = toHalfWidth_(str).replace(/[^\d]/g, "");
-  if (digits.length === 8) {
-    return digits;
-  }
-
-  const match = str.match(/(\d{4})[年\/\-.](\d{1,2})[月\/\-.](\d{1,2})/);
-  if (match) {
-    const y = match[1];
-    const m = String(match[2]).padStart(2, "0");
-    const d = String(match[3]).padStart(2, "0");
-    return `${y}${m}${d}`;
-  }
-
-  const mdMatch = str.match(/(\d{1,2})\/(\d{1,2})/);
-  if (mdMatch) {
-    const props = PropertiesService.getScriptProperties();
-    const year =
-      props.getProperty("DEFAULT_EVENT_YEAR") ||
-      String(new Date().getFullYear());
-    const m = String(mdMatch[1]).padStart(2, "0");
-    const d = String(mdMatch[2]).padStart(2, "0");
-    return `${year}${m}${d}`;
-  }
-
-  throw new Error(`イベント日の形式が正しくありません: ${value}`);
-}
-
-/**
- * 既存シートの英語ヘッダーを日本語に変換（1回実行）
- */
-function migrateHeadersToJapanese() {
-  migrateSheetHeaders_(getSheet_(SHEET_MASTER), MASTER_SCHEMA);
-  migrateSheetHeaders_(getSheet_(SHEET_EVENTS), EVENT_SCHEMA);
-  Logger.log("ヘッダーを日本語に更新しました。");
-}
-
-/**
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {Object[]} schema
- */
-function migrateSheetHeaders_(sheet, schema) {
-  const headerMap = getHeaderMap_(sheet);
-  schema.forEach((col) => {
-    if (headerMap[col.key] !== undefined) {
-      sheet.getRange(1, headerMap[col.key] + 1).setValue(col.label);
-    }
-  });
-}
-
-/**
- * フォーム回答シートの全行を処理（未反映分の一括取り込み）
- */
+/** 全フォーム回答を転記 */
 function processAllFormResponses() {
   const sheet = getFormResponseSheet_();
   const lastRow = sheet.getLastRow();
+  const results = [];
+
   if (lastRow < 2) {
-    Logger.log("フォーム回答がありません。");
-    return;
+    const msg = "フォーム回答がありません。";
+    Logger.log(msg);
+    alertIfUi_(msg);
+    return results;
   }
 
-  const results = [];
   for (let row = 2; row <= lastRow; row++) {
     try {
-      const payload = mapSheetRowToPayload_(sheet, row);
-      results.push({ row: row, result: handleEventApplication_(payload) });
+      const result = transferFormRow_(sheet, row);
+      results.push({ row: row, ok: true, name: result.data.user_name, duplicate: result.duplicate });
     } catch (error) {
-      results.push({ row: row, error: error.message || String(error) });
+      results.push({ row: row, ok: false, error: error.message || String(error) });
     }
   }
-  Logger.log(JSON.stringify(results, null, 2));
+
+  const summary = summarizeFormSync_(results);
+  Logger.log(summary);
+  alertIfUi_("フォーム転記結果\n\n" + summary);
   return results;
 }
 
-/**
- * フォーム送信トリガーをインストール（GAS エディタから1回実行）
- */
-function installFormSubmitTrigger() {
-  const triggers = ScriptApp.getProjectTriggers();
-  const exists = triggers.some(
-    (trigger) => trigger.getHandlerFunction() === "onFormSubmit",
-  );
-  if (exists) {
-    Logger.log("onFormSubmit トリガーは既に設定済みです。");
-    return;
-  }
-
-  ScriptApp.newTrigger("onFormSubmit")
-    .forSpreadsheet(getSpreadsheet_())
-    .onFormSubmit()
-    .create();
-
-  Logger.log("onFormSubmit トリガーをインストールしました。");
-}
-
-/**
- * フォーム送信トリガーを削除
- */
-function uninstallFormSubmitTrigger() {
-  const triggers = ScriptApp.getProjectTriggers();
-  let removed = 0;
-  triggers.forEach((trigger) => {
-    if (trigger.getHandlerFunction() === "onFormSubmit") {
-      ScriptApp.deleteTrigger(trigger);
-      removed++;
-    }
-  });
-  Logger.log(`onFormSubmit トリガーを ${removed} 件削除しました。`);
-}
-
-/**
- * 回答シートの最終行を手動処理（テスト・再処理用）
- */
+/** 最終行だけ転記（テスト用） */
 function processLatestFormResponse() {
   const sheet = getFormResponseSheet_();
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) {
+  const row = sheet.getLastRow();
+  if (row < 2) {
     throw new Error("フォーム回答がありません。");
   }
-  const payload = mapSheetRowToPayload_(sheet, lastRow);
-  const result = handleEventApplication_(payload);
+  const result = transferFormRow_(sheet, row);
   Logger.log(JSON.stringify(result, null, 2));
   return result;
 }
 
-/**
- * フォーム回答シートを取得
- * @returns {GoogleAppsScript.Spreadsheet.Sheet}
- */
+/** トリガー設定 */
+function installFormSubmitTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  if (triggers.some((t) => t.getHandlerFunction() === "onFormSubmit")) {
+    Logger.log("トリガー設定済み");
+    return;
+  }
+  ScriptApp.newTrigger("onFormSubmit")
+    .forSpreadsheet(getSpreadsheet_())
+    .onFormSubmit()
+    .create();
+  Logger.log("トリガーを設定しました");
+}
+
+function uninstallFormSubmitTrigger() {
+  ScriptApp.getProjectTriggers().forEach((t) => {
+    if (t.getHandlerFunction() === "onFormSubmit") {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
+function reinstallFormSubmitTrigger() {
+  uninstallFormSubmitTrigger();
+  installFormSubmitTrigger();
+}
+
+/** スプレッドシートメニュー */
+
+// =============================================================================
+// 転記の本体
+// =============================================================================
+
+function transferFormResponse_(e) {
+  if (!e || !e.range) {
+    throw new Error("フォームイベントが不正です");
+  }
+  try {
+    const result = transferFormRow_(e.range.getSheet(), e.range.getRow());
+    Logger.log("転記OK: " + JSON.stringify(result));
+    return result;
+  } catch (error) {
+    const msg = error.message || String(error);
+    Logger.log("転記エラー: " + msg);
+    try {
+      if (typeof sendLineNotification_ === "function") {
+        sendLineNotification_("【うおの会】フォーム転記エラー\n\n" + msg);
+      }
+    } catch (ignore) {}
+    throw error;
+  }
+}
+
+function transferFormRow_(formSheet, rowIndex) {
+  const data = readFormRow_(formSheet, rowIndex);
+
+  const eventSheet = getSheet_(SHEET_EVENTS);
+  const masterSheet = getSheet_(SHEET_MASTER);
+
+  ensureAllEventHeaders_(eventSheet);
+  ensureAllMasterHeaders_(masterSheet);
+
+  const existing = findEventByEmailAndDate_(eventSheet, data.email, data.event_date);
+  let eventRow;
+  let duplicate = false;
+
+  if (existing) {
+    duplicate = true;
+    fillEmptyEventCells_(eventSheet, existing._rowIndex, data);
+    eventRow = rowToObject_(eventSheet, existing._rowIndex);
+  } else {
+    eventRow = writeEventRow_(eventSheet, data);
+  }
+
+  let masterRow = findCustomerByEmail_(masterSheet, data.email);
+  if (!masterRow) {
+    masterRow = writeMasterRow_(masterSheet, data);
+  }
+
+  SpreadsheetApp.flush();
+
+  return {
+    ok: true,
+    duplicate: duplicate,
+    data: data,
+    eventRow: eventRow,
+    masterRow: masterRow,
+  };
+}
+
+// =============================================================================
+// フォーム1行の読み取り
+// =============================================================================
+
+function readFormRow_(sheet, rowIndex) {
+  const lastCol = sheet.getLastColumn();
+  if (lastCol < 1) {
+    throw new Error("フォーム回答シートに列がありません");
+  }
+
+  const headers = sheet
+    .getRange(1, 1, 1, lastCol)
+    .getValues()[0]
+    .map((h) => String(h || "").trim());
+  const cells = sheet
+    .getRange(rowIndex, 1, 1, lastCol)
+    .getValues()[0]
+    .map((c) => (c instanceof Date ? c : String(c || "").trim()));
+
+  let userName = "";
+  let nameReading = "";
+  let eventRaw = "";
+  let receiptRequired = "不要";
+  let receiptName = "";
+  const emails = [];
+
+  for (let i = 0; i < headers.length; i++) {
+    const header = headers[i];
+    const value = String(cells[i] || "").trim();
+    if (!header || !value) {
+      continue;
+    }
+
+    if (header === "氏名" || (header.indexOf("氏名") >= 0 && header.indexOf("読み") < 0)) {
+      userName = value;
+    } else if (header === "読み方" || header.indexOf("読み") >= 0) {
+      nameReading = value;
+    } else if (header.indexOf("参加イベント") >= 0 || header.indexOf("参加") >= 0) {
+      eventRaw = value;
+    } else if (header.indexOf("領収書の有無") >= 0 || header === "領収書") {
+      receiptRequired = value;
+    } else if (header.indexOf("宛名") >= 0) {
+      receiptName = value;
+    }
+
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      emails.push(value);
+    }
+  }
+
+  const email = emails.length >= 2 ? emails[emails.length - 1] : emails[0] || "";
+
+  if (!userName) {
+    throw new Error("行" + rowIndex + ": 氏名が空です");
+  }
+  if (!email) {
+    throw new Error("行" + rowIndex + ": メールアドレスが空です");
+  }
+  if (!eventRaw) {
+    throw new Error("行" + rowIndex + ": 参加イベントが空です");
+  }
+
+  return {
+    user_name: sanitizeUserName_(userName),
+    name_reading: nameReading,
+    email: sanitizeEmail_(email),
+    event_date: normalizeEventDate_(eventRaw),
+    receipt_required: normalizeReceiptRequired_(receiptRequired),
+    receipt_name: receiptName,
+  };
+}
+
+// =============================================================================
+// シートへの書き込み（日本語ヘッダー名で直接書く）
+// =============================================================================
+
+function writeEventRow_(sheet, data) {
+  const rowNum = Math.max(sheet.getLastRow(), 1) + 1;
+  const labels = {
+    記録日時: new Date(),
+    イベント日: data.event_date,
+    氏名: data.user_name,
+    読み方: data.name_reading || "",
+    申込メール: data.email,
+    領収書: data.receipt_required || "不要",
+    領収書宛名: data.receipt_name || "",
+    LINEユーザーID: data.line_user_id || "",
+    支払い状況: "未",
+    来場状況: "未",
+    領収書DL数: 0,
+  };
+  writeCellsByLabels_(sheet, rowNum, labels);
+  return rowToObject_(sheet, rowNum);
+}
+
+function writeMasterRow_(sheet, data) {
+  const rowNum = Math.max(sheet.getLastRow(), 1) + 1;
+  const labels = {
+    LINEユーザーID: "",
+    LINE表示名: "",
+    氏名: data.user_name,
+    会社名: "",
+    区分: "",
+    役職: "",
+    メールアドレス: data.email,
+    電話番号: "",
+    紹介者: "フォーム申込",
+    ステータス: "active",
+    登録日時: new Date(),
+  };
+  writeCellsByLabels_(sheet, rowNum, labels);
+  return rowToObject_(sheet, rowNum);
+}
+
+function writeCellsByLabels_(sheet, rowNum, labels) {
+  const headerMap = getHeaderMap_(sheet);
+  Object.keys(labels).forEach((label) => {
+    if (headerMap[label] !== undefined) {
+      sheet.getRange(rowNum, headerMap[label] + 1).setValue(labels[label]);
+    }
+  });
+}
+
+function fillEmptyEventCells_(sheet, rowNum, data) {
+  const row = rowToObject_(sheet, rowNum);
+  const labels = {};
+  if (!row.user_name && data.user_name) {
+    labels["氏名"] = data.user_name;
+  }
+  if (!row.name_reading && data.name_reading) {
+    labels["読み方"] = data.name_reading;
+  }
+  if (!row.receipt_name && data.receipt_name) {
+    labels["領収書宛名"] = data.receipt_name;
+  }
+  writeCellsByLabels_(sheet, rowNum, labels);
+}
+
+function findEventByEmailAndDate_(sheet, email, eventDate) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return null;
+  }
+
+  const targetEmail = sanitizeEmail_(email);
+  const targetDate = String(eventDate);
+
+  for (let row = 2; row <= lastRow; row++) {
+    const record = rowToObject_(sheet, row);
+    const recordEmail = sanitizeEmailSafe_(record.form_email);
+    const recordDate = String(record.event_date || "").trim();
+    if (recordEmail === targetEmail && recordDate === targetDate) {
+      return record;
+    }
+  }
+  return null;
+}
+
+// =============================================================================
+// ユーティリティ
+// =============================================================================
+
+function summarizeFormSync_(results) {
+  let ok = 0;
+  let dup = 0;
+  let err = 0;
+  const errors = [];
+
+  results.forEach((r) => {
+    if (!r.ok) {
+      err++;
+      errors.push("行" + r.row + ": " + r.error);
+    } else if (r.duplicate) {
+      dup++;
+    } else {
+      ok++;
+    }
+  });
+
+  const lines = [
+    "新規転記: " + ok + " 件",
+    "重複スキップ: " + dup + " 件",
+    "エラー: " + err + " 件",
+  ];
+  if (errors.length > 0) {
+    lines.push("", errors.join("\n"));
+  }
+  return lines.join("\n");
+}
+
+function alertIfUi_(message) {
+  try {
+    SpreadsheetApp.getUi().alert(message);
+  } catch (e) {
+  }
+}
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("うおの会")
+    .addItem("フォーム回答を一括転記", "processAllFormResponses")
+    .addItem("初回セットアップ＋転記", "runFullFormSync")
+    .addSeparator()
+    .addItem("設定を診断", "diagnoseFormSubmitSetup")
+    .addItem("トリガーを再設定", "reinstallFormSubmitTrigger")
+    .addToUi();
+}
+
 function getFormResponseSheet_() {
   const props = PropertiesService.getScriptProperties();
   const sheetName = props.getProperty("FORM_RESPONSE_SHEET_NAME");
@@ -1922,7 +2043,8 @@ function getFormResponseSheet_() {
     const name = sheets[i].getName();
     if (
       name.indexOf("フォームの回答") >= 0 ||
-      name.indexOf("Form Responses") >= 0
+      name.indexOf("Form Responses") >= 0 ||
+      name.indexOf("Form_Responses") >= 0
     ) {
       return sheets[i];
     }
@@ -1933,13 +2055,44 @@ function getFormResponseSheet_() {
   );
 }
 
-// =============================================================================
-// セットアップ・テスト用（エディタから手動実行可）
-// =============================================================================
+function diagnoseFormSubmitSetup() {
+  const lines = ["=== フォーム連携診断 ==="];
+  try {
+    const spreadsheet = getSpreadsheet_();
+    lines.push("スプレッドシート: " + spreadsheet.getName());
+    const formSheet = getFormResponseSheet_();
+    lines.push("フォーム回答シート: " + formSheet.getName());
+    lines.push("回答行数: " + Math.max(formSheet.getLastRow() - 1, 0));
+    lines.push(
+      "トリガー数: " +
+        ScriptApp.getProjectTriggers().filter(function (t) {
+          return t.getHandlerFunction() === "onFormSubmit";
+        }).length,
+    );
+    if (formSheet.getLastRow() >= 2) {
+      const row = formSheet.getLastRow();
+      const data = readFormRow_(formSheet, row);
+      lines.push("--- 最終行テスト ---");
+      lines.push("氏名: " + data.user_name);
+      lines.push("読み方: " + (data.name_reading || "-"));
+      lines.push("メール: " + data.email);
+      lines.push("イベント日: " + data.event_date);
+    }
+  } catch (e) {
+    lines.push("エラー: " + (e.message || String(e)));
+  }
+  const report = lines.join("\n");
+  Logger.log(report);
+  alertIfUi_(report);
+  return report;
+}
 
-/**
- * スプレッドシートにヘッダー行を初期化
- */
+function processFormResponseRow(rowNumber) {
+  const sheet = getFormResponseSheet_();
+  return transferFormRow_(sheet, rowNumber);
+}
+
+/** シートのヘッダー行を初期化 */
 function setupSpreadsheetHeaders() {
   ensureAllMasterHeaders_(getSheet_(SHEET_MASTER));
   ensureAllEventHeaders_(getSheet_(SHEET_EVENTS));
