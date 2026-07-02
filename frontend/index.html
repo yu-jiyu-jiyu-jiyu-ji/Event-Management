@@ -88,6 +88,12 @@
     .topic-card {
       border-left: 3px solid #f59e0b;
     }
+    #busy-overlay {
+      display: none;
+    }
+    #busy-overlay.is-active {
+      display: flex;
+    }
   </style>
 </head>
 <body class="gradient-bg min-h-screen text-slate-800 antialiased">
@@ -369,6 +375,21 @@
 
   </main>
 
+  <!-- 全画面ローディング（氏名送信・受付完了など） -->
+  <div id="busy-overlay"
+    class="fixed inset-0 z-[200] items-center justify-center bg-slate-900/75 backdrop-blur-sm px-6"
+    role="alertdialog" aria-modal="true" aria-labelledby="busy-message" aria-busy="true">
+    <div class="glass rounded-3xl shadow-card p-8 w-full max-w-sm text-center animate-fade-up">
+      <div class="w-14 h-14 mx-auto mb-5 rounded-2xl bg-sky-50 flex items-center justify-center">
+        <svg class="w-7 h-7 text-uo-500 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
+      <p id="busy-message" class="text-slate-600 text-sm animate-pulse-soft leading-relaxed">処理中…</p>
+    </div>
+  </div>
+
   <!-- トースト -->
   <div id="toast"
     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl
@@ -400,6 +421,7 @@
       editMode: false,
       isSubmitting: false,
       needsEmailConfirm: false,
+      busyStageTimer: null,
     };
 
     // =========================================================================
@@ -424,6 +446,39 @@
       if (!button) return;
       button.disabled = loading;
       button.textContent = loading ? "処理中…" : defaultText;
+    }
+
+    function showBusyOverlay(message) {
+      $("busy-message").textContent = message || "処理中…";
+      $("busy-overlay").classList.add("is-active");
+    }
+
+    function hideBusyOverlay() {
+      if (state.busyStageTimer) {
+        clearInterval(state.busyStageTimer);
+        state.busyStageTimer = null;
+      }
+      $("busy-overlay").classList.remove("is-active");
+    }
+
+    /**
+     * 段階メッセージ付きの全画面ローディングで非同期処理を実行
+     * @param {string[]} stages
+     * @param {() => Promise<*>} task
+     */
+    async function runStagedBusy(stages, task) {
+      const messages = stages && stages.length ? stages : ["処理中…"];
+      let stageIndex = 0;
+      showBusyOverlay(messages[0]);
+      state.busyStageTimer = setInterval(() => {
+        stageIndex = Math.min(stageIndex + 1, messages.length - 1);
+        $("busy-message").textContent = messages[stageIndex];
+      }, 1400);
+      try {
+        return await task();
+      } finally {
+        hideBusyOverlay();
+      }
     }
 
     function formatEventDate(dateStr) {
@@ -611,7 +666,14 @@
       setLoading($("btn-name-submit"), true, "次へ進む");
 
       try {
-        const result = await linkParticipantByName(userName, email);
+        const result = await runStagedBusy(
+          [
+            "参加者リストを確認しています…",
+            "お名前を照合しています…",
+            "情報を登録しています…",
+          ],
+          () => linkParticipantByName(userName, email),
+        );
         handleLinkResult(result);
       } catch (err) {
         showToast(err.message || "確認に失敗しました");
@@ -654,7 +716,14 @@
           payload.position_name = $("edit-position-name").value.trim();
         }
 
-        const result = await callGasApi("checkin_complete", payload);
+        const result = await runStagedBusy(
+          [
+            "受付内容を確認しています…",
+            "来場ステータスを更新しています…",
+            "受付を完了しています…",
+          ],
+          () => callGasApi("checkin_complete", payload),
+        );
         state.customer = result.customer;
         showCompleteScreen();
       } catch (err) {
