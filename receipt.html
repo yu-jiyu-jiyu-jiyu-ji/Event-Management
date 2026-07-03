@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>うおの会 領収書</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <style>
+    .screen { display: none; }
+    .screen.active { display: block; }
+    body { background: linear-gradient(160deg, #0f172a 0%, #0c4a6e 45%, #082f49 100%); min-height: 100vh; }
+    .glass { background: rgba(255,255,255,0.97); backdrop-filter: blur(12px); }
+    #busy-overlay { display: none; }
+    #busy-overlay.is-active { display: flex; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 1s linear infinite; }
+  </style>
+</head>
+<body class="text-slate-800 antialiased">
+  <header class="fixed top-0 inset-x-0 z-40 px-4 py-3">
+    <div class="max-w-md mx-auto flex items-center gap-2">
+      <span class="text-2xl">🐟</span>
+      <div>
+        <p class="text-white text-sm font-bold">うおの会</p>
+        <p class="text-sky-300/80 text-[10px]">領収書ダウンロード</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-md mx-auto px-4 pt-20 pb-10">
+    <section id="screen-loading" class="screen active">
+      <div class="glass rounded-3xl p-8 mt-8 text-center">
+        <div class="w-10 h-10 border-4 border-sky-200 border-t-sky-600 rounded-full spin mx-auto mb-4"></div>
+        <p class="text-sm text-slate-600">読み込み中…</p>
+      </div>
+    </section>
+
+    <section id="screen-error" class="screen">
+      <div class="glass rounded-3xl p-8 mt-8 text-center">
+        <p class="text-4xl mb-3">⚠️</p>
+        <p id="error-message" class="text-sm text-slate-600 mb-6"></p>
+        <button id="btn-retry" type="button" class="w-full py-3 rounded-2xl bg-sky-600 text-white text-sm font-semibold">もう一度</button>
+      </div>
+    </section>
+
+    <section id="screen-empty" class="screen">
+      <div class="glass rounded-3xl p-8 mt-8 text-center">
+        <p class="text-4xl mb-3">📄</p>
+        <h2 class="text-lg font-bold mb-2">発行できる領収書がありません</h2>
+        <p id="empty-message" class="text-sm text-slate-500 leading-relaxed"></p>
+      </div>
+    </section>
+
+    <section id="screen-list" class="screen">
+      <div class="glass rounded-3xl p-6 mt-4">
+        <h2 class="text-lg font-bold mb-4">発行可能な領収書</h2>
+        <div id="receipt-list" class="space-y-3"></div>
+      </div>
+    </section>
+
+    <section id="screen-detail" class="screen">
+      <div class="glass rounded-3xl p-6 mt-4">
+        <h2 id="detail-title" class="text-lg font-bold mb-1"></h2>
+        <p id="detail-date" class="text-xs text-slate-500 mb-4"></p>
+        <dl class="space-y-3 text-sm mb-6">
+          <div class="flex justify-between gap-4"><dt class="text-slate-500">宛名</dt><dd id="detail-addressee" class="font-medium text-right"></dd></div>
+          <div class="flex justify-between gap-4"><dt class="text-slate-500">金額</dt><dd id="detail-amount" class="font-bold text-right"></dd></div>
+        </dl>
+        <button id="btn-download" type="button" class="w-full py-4 rounded-2xl bg-sky-600 text-white font-bold text-sm">領収書PDFをダウンロード</button>
+        <p class="text-[11px] text-slate-400 mt-3 text-center">但し書き：交流会参加費として</p>
+      </div>
+    </section>
+
+    <section id="screen-done" class="screen">
+      <div class="glass rounded-3xl p-8 mt-8 text-center">
+        <p class="text-4xl mb-3">✅</p>
+        <h2 class="text-lg font-bold mb-2">ダウンロード完了</h2>
+        <p class="text-sm text-slate-500">領収書を保存しました。</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="busy-overlay" class="fixed inset-0 z-50 items-center justify-center bg-slate-900/75 px-6">
+    <div class="glass rounded-3xl p-8 w-full max-w-sm text-center">
+      <div class="w-10 h-10 border-4 border-sky-200 border-t-sky-600 rounded-full spin mx-auto mb-4"></div>
+      <p id="busy-message" class="text-sm text-slate-600">処理中…</p>
+    </div>
+  </div>
+
+  <script>
+    const CONFIG = {
+      LIFF_ID: "2010484166-bN2zuFKb",
+      GAS_API_URL: "https://script.google.com/macros/s/AKfycbw0STTLLXzPWjXiRxu38ex5U9VGWTkhUeXZRCio8ox9llwGXoyUI2Ks6699jH3Vdr0m/exec",
+      EVENT_DATE: new URLSearchParams(location.search).get("event") || "",
+    };
+
+    const state = { lineUserId: null, items: [], selected: null, busyTimer: null };
+    const $ = (id) => document.getElementById(id);
+
+    function showScreen(name) {
+      document.querySelectorAll(".screen").forEach((el) => el.classList.remove("active"));
+      const t = $("screen-" + name);
+      if (t) t.classList.add("active");
+    }
+
+    function formatEventDate(s) {
+      if (!s || s.length !== 8) return s || "";
+      return s.slice(0,4) + "/" + s.slice(4,6) + "/" + s.slice(6,8);
+    }
+
+    async function callGasApi(action, data) {
+      const payload = JSON.stringify({ action, ...data });
+      const url = CONFIG.GAS_API_URL + "?action=" + encodeURIComponent(action) + "&payload=" + encodeURIComponent(payload);
+      const res = await fetch(url, { method: "GET" });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "API error");
+      return json;
+    }
+
+    function showBusy(msg) {
+      $("busy-message").textContent = msg;
+      $("busy-overlay").classList.add("is-active");
+    }
+    function hideBusy() {
+      if (state.busyTimer) { clearInterval(state.busyTimer); state.busyTimer = null; }
+      $("busy-overlay").classList.remove("is-active");
+    }
+    async function runStagedBusy(stages, task) {
+      let i = 0;
+      showBusy(stages[0]);
+      state.busyTimer = setInterval(() => {
+        i = Math.min(i + 1, stages.length - 1);
+        $("busy-message").textContent = stages[i];
+      }, 1400);
+      try { return await task(); } finally { hideBusy(); }
+    }
+
+    async function initLiff() {
+      await liff.init({ liffId: CONFIG.LIFF_ID });
+      if (!liff.isLoggedIn()) {
+        liff.login({ redirectUri: window.location.href });
+        return null;
+      }
+      const p = await liff.getProfile();
+      return p.userId;
+    }
+
+    function selectItem(item) {
+      state.selected = item;
+      $("detail-title").textContent = item.event_name || "うおの会";
+      $("detail-date").textContent = "開催日: " + formatEventDate(item.event_date);
+      $("detail-addressee").textContent = item.addressee_preview || "　　　　様";
+      $("detail-amount").textContent = item.amount_display || "";
+      showScreen("detail");
+    }
+
+    function renderList(items) {
+      const box = $("receipt-list");
+      box.innerHTML = "";
+      items.forEach((item) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "w-full text-left p-4 rounded-2xl border border-slate-200 hover:bg-slate-50";
+        btn.innerHTML = "<p class='font-semibold'>" + (item.event_name || "うおの会") + "</p><p class='text-xs text-slate-500 mt-1'>" + formatEventDate(item.event_date) + " · " + (item.amount_display || "") + "</p>";
+        btn.addEventListener("click", () => selectItem(item));
+        box.appendChild(btn);
+      });
+    }
+
+    function downloadBase64Pdf(base64, filename) {
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || "receipt.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function bootstrap() {
+      showScreen("loading");
+      try {
+        state.lineUserId = await initLiff();
+        if (!state.lineUserId) return;
+
+        const list = await callGasApi("receipt_list", { line_user_id: state.lineUserId });
+        let items = list.eligible || [];
+
+        if (CONFIG.EVENT_DATE) {
+          const one = await callGasApi("receipt_lookup", {
+            line_user_id: state.lineUserId,
+            event_date: CONFIG.EVENT_DATE,
+          });
+          if (one.receipt && one.receipt.eligible) {
+            items = [one.receipt];
+          } else {
+            $("empty-message").textContent = one.receipt && one.receipt.reason ? one.receipt.reason : "このイベントの領収書は発行できません。";
+            showScreen("empty");
+            return;
+          }
+        }
+
+        if (!items.length) {
+          $("empty-message").textContent = "領収書の申込があり、受付済みで、発行開始日以降のイベントがありません。";
+          showScreen("empty");
+          return;
+        }
+
+        state.items = items;
+        if (items.length === 1) {
+          selectItem(items[0]);
+        } else {
+          renderList(items);
+          showScreen("list");
+        }
+      } catch (e) {
+        $("error-message").textContent = e.message || String(e);
+        showScreen("error");
+      }
+    }
+
+    $("btn-download").addEventListener("click", async () => {
+      if (!state.selected || !state.lineUserId) return;
+      try {
+        const result = await runStagedBusy(
+          ["発行内容を確認しています…", "領収書PDFを作成しています…", "ダウンロードを準備しています…"],
+          () => callGasApi("receipt_generate", {
+            line_user_id: state.lineUserId,
+            event_date: state.selected.event_date,
+          }),
+        );
+        downloadBase64Pdf(result.pdf_base64, result.filename);
+        showScreen("done");
+      } catch (e) {
+        alert(e.message || "ダウンロードに失敗しました");
+      }
+    });
+
+    $("btn-retry").addEventListener("click", () => bootstrap());
+    bootstrap();
+  </script>
+</body>
+</html>
