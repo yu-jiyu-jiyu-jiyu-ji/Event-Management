@@ -211,7 +211,9 @@
         }
 
         if (!items.length) {
-          $("empty-message").textContent = "領収書の申込があり、受付済みで、発行開始日以降のイベントがありません。";
+          $("empty-message").textContent =
+            list.first_reason ||
+            "領収書の申込があり、受付済みで、発行開始日以降のイベントがありません。";
           showScreen("empty");
           return;
         }

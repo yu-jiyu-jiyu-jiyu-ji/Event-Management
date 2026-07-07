@@ -806,6 +806,13 @@ function buildReceiptEligibility_(eventRow, settings) {
       available_from: from,
     };
   }
+  if (Number(eventRow.receipt_dl_count || 0) !== 0) {
+    return {
+      eligible: false,
+      reason: "\u904e\u53bb\u306b\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u6e08\u307f\u3067\u3059\u3002\u518d\u5ea6\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u3092\u3057\u305f\u3044\u969b\u306f\u30aa\u30fc\u30ca\u30fc\u307e\u3067\u3054\u9023\u7d61\u304f\u3060\u3055\u3044\u3002",
+      receipt_dl_count: Number(eventRow.receipt_dl_count || 0),
+    };
+  }
   return {
     eligible: true,
     event_date: settings.event_date,
@@ -822,6 +829,7 @@ function handleReceiptList_(payload) {
   const eventSheet = getSheet_(SHEET_EVENTS);
   const lastRow = eventSheet.getLastRow();
   const eligible = [];
+  let firstReason = "";
 
   if (lastRow >= 2) {
     for (let row = 2; row <= lastRow; row++) {
@@ -833,12 +841,14 @@ function handleReceiptList_(payload) {
       const info = buildReceiptEligibility_(eventRow, settings);
       if (info.eligible) {
         eligible.push(info);
+      } else if (!firstReason) {
+        firstReason = info.reason || "";
       }
     }
   }
 
   eligible.sort((a, b) => String(b.event_date).localeCompare(String(a.event_date)));
-  return { ok: true, eligible: eligible, today: todayYmdJst_() };
+  return { ok: true, eligible: eligible, today: todayYmdJst_(), first_reason: firstReason };
 }
 
 function handleReceiptLookup_(payload) {
