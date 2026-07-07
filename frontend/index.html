@@ -88,12 +88,6 @@
     .topic-card {
       border-left: 3px solid #f59e0b;
     }
-    #busy-overlay {
-      display: none;
-    }
-    #busy-overlay.is-active {
-      display: flex;
-    }
   </style>
 </head>
 <body class="gradient-bg min-h-screen text-slate-800 antialiased">
@@ -145,60 +139,37 @@
       </div>
     </section>
 
-    <!-- ===== 氏名入力（未連携） ===== -->
-    <section id="screen-name" class="screen">
+    <!-- ===== メール入力（新規・未連携） ===== -->
+    <section id="screen-email" class="screen">
       <div class="glass rounded-3xl shadow-card shadow-glow p-6 mt-4 animate-fade-up">
         <div class="text-center mb-6">
           <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-100 to-uo-100 mb-4">
-            <span class="text-3xl">🙋</span>
+            <span class="text-3xl">📧</span>
           </div>
           <h2 class="text-xl font-bold text-slate-800 mb-2">ようこそ！</h2>
           <p class="text-sm text-slate-500 leading-relaxed">
-            お申込み時の<strong>氏名</strong>を入力してください
+            受付のため、<br />イベント申込時に記入いただいた<br />メールアドレスを入力してください
           </p>
         </div>
 
-        <form id="form-name" class="space-y-4">
+        <form id="form-email" class="space-y-4">
           <div>
-            <label for="input-name" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-              氏名
+            <label for="input-email" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
+              メールアドレス
             </label>
             <input
-              id="input-name"
-              type="text"
-              autocomplete="name"
-              placeholder="例：山田太郎"
+              id="input-email"
+              type="email"
+              inputmode="email"
+              autocomplete="email"
+              placeholder="example@company.com"
               required
               class="w-full px-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50
                      text-base text-slate-800 placeholder:text-slate-400
                      focus:border-uo-400 focus:bg-white transition-colors"
             />
-            <p class="text-[11px] text-slate-400 mt-1.5">スペースの有無は自動で判別します</p>
           </div>
-
-          <div id="email-confirm-section" class="hidden space-y-2 animate-fade-up">
-            <div class="bg-amber-50 border border-amber-100 rounded-xl p-3">
-              <p class="text-xs text-amber-800 leading-relaxed">
-                同姓同名の方がいらっしゃいます。<br />
-                お申込み時の<strong>メールアドレス</strong>を入力してください。
-              </p>
-            </div>
-            <label for="input-email-confirm" class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
-              メールアドレス（確認用）
-            </label>
-            <input
-              id="input-email-confirm"
-              type="email"
-              inputmode="email"
-              autocomplete="email"
-              placeholder="example@company.com"
-              class="w-full px-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50
-                     text-base text-slate-800 placeholder:text-slate-400
-                     focus:border-uo-400 focus:bg-white transition-colors"
-            />
-          </div>
-
-          <button id="btn-name-submit" type="submit"
+          <button id="btn-email-submit" type="submit"
             class="w-full py-4 rounded-2xl bg-gradient-to-r from-uo-600 to-uo-500
                    text-white font-bold text-sm shadow-lg shadow-uo-500/25
                    hover:from-uo-700 hover:to-uo-600 active:scale-[0.98] transition-all
@@ -217,21 +188,13 @@
             <span class="text-2xl">👋</span>
           </div>
           <h2 id="welcome-title" class="text-2xl font-bold text-slate-800 mb-1"></h2>
-          <p id="welcome-subtitle" class="text-sm text-slate-500">本日もお越しいただきありがとうございます</p>
+          <p class="text-sm text-slate-500">本日もお越しいただきありがとうございます</p>
         </div>
 
         <!-- プレビューカード -->
         <div id="preview-card" class="bg-gradient-to-br from-slate-50 to-sky-50 rounded-2xl p-5 mb-5 border border-slate-100">
           <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-3">登録情報</p>
           <dl class="space-y-3">
-            <div class="flex items-start gap-3">
-              <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">氏名</dt>
-              <dd id="preview-name" class="text-sm font-semibold text-slate-800 flex-1"></dd>
-            </div>
-            <div id="preview-line-name-row" class="flex items-start gap-3 hidden">
-              <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">LINE名</dt>
-              <dd id="preview-line-name" class="text-sm text-slate-600 flex-1"></dd>
-            </div>
             <div class="flex items-start gap-3">
               <dt class="text-xs text-slate-400 w-16 shrink-0 pt-0.5">会社名</dt>
               <dd id="preview-company" class="text-sm font-semibold text-slate-800 flex-1"></dd>
@@ -375,21 +338,6 @@
 
   </main>
 
-  <!-- 全画面ローディング（氏名送信・受付完了など） -->
-  <div id="busy-overlay"
-    class="fixed inset-0 z-[200] items-center justify-center bg-slate-900/75 backdrop-blur-sm px-6"
-    role="alertdialog" aria-modal="true" aria-labelledby="busy-message" aria-busy="true">
-    <div class="glass rounded-3xl shadow-card p-8 w-full max-w-sm text-center animate-fade-up">
-      <div class="w-14 h-14 mx-auto mb-5 rounded-2xl bg-sky-50 flex items-center justify-center">
-        <svg class="w-7 h-7 text-uo-500 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-        </svg>
-      </div>
-      <p id="busy-message" class="text-slate-600 text-sm animate-pulse-soft leading-relaxed">処理中…</p>
-    </div>
-  </div>
-
   <!-- トースト -->
   <div id="toast"
     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl
@@ -406,9 +354,6 @@
       LIFF_URL: "https://liff.line.me/2010484166-bN2zuFKb",
       GAS_API_URL: "https://script.google.com/macros/s/AKfycbw0STTLLXzPWjXiRxu38ex5U9VGWTkhUeXZRCio8ox9llwGXoyUI2Ks6699jH3Vdr0m/exec",
       EVENT_DATE: new URLSearchParams(location.search).get("event") || "20260707",
-      // ようこそ画面のサブタイトル（ここを編集してください）
-      WELCOME_MSG_AUTO: "LINE連携済みのため、自動で確認しました",
-      WELCOME_MSG_DEFAULT: "本日もお越しいただきありがとうございます",
     };
 
     // =========================================================================
@@ -420,8 +365,6 @@
       customer: null,
       editMode: false,
       isSubmitting: false,
-      needsEmailConfirm: false,
-      busyStageTimer: null,
     };
 
     // =========================================================================
@@ -446,39 +389,6 @@
       if (!button) return;
       button.disabled = loading;
       button.textContent = loading ? "処理中…" : defaultText;
-    }
-
-    function showBusyOverlay(message) {
-      $("busy-message").textContent = message || "処理中…";
-      $("busy-overlay").classList.add("is-active");
-    }
-
-    function hideBusyOverlay() {
-      if (state.busyStageTimer) {
-        clearInterval(state.busyStageTimer);
-        state.busyStageTimer = null;
-      }
-      $("busy-overlay").classList.remove("is-active");
-    }
-
-    /**
-     * 段階メッセージ付きの全画面ローディングで非同期処理を実行
-     * @param {string[]} stages
-     * @param {() => Promise<*>} task
-     */
-    async function runStagedBusy(stages, task) {
-      const messages = stages && stages.length ? stages : ["処理中…"];
-      let stageIndex = 0;
-      showBusyOverlay(messages[0]);
-      state.busyStageTimer = setInterval(() => {
-        stageIndex = Math.min(stageIndex + 1, messages.length - 1);
-        $("busy-message").textContent = messages[stageIndex];
-      }, 1400);
-      try {
-        return await task();
-      } finally {
-        hideBusyOverlay();
-      }
     }
 
     function formatEventDate(dateStr) {
@@ -553,7 +463,6 @@
         const lookup = await callGasApi("checkin_lookup", {
           line_user_id: state.lineUserId,
           event_date: CONFIG.EVENT_DATE,
-          line_display_name: state.displayName,
         });
 
         if (lookup.alreadyCheckedIn) {
@@ -564,9 +473,9 @@
 
         if (lookup.found && lookup.customer) {
           state.customer = lookup.customer;
-          showWelcomeScreen(lookup.autoIdentified);
+          showWelcomeScreen();
         } else {
-          showScreen("name");
+          showScreen("email");
         }
       } catch (err) {
         console.error(err);
@@ -575,20 +484,9 @@
       }
     }
 
-    function showWelcomeScreen(autoIdentified = false) {
+    function showWelcomeScreen() {
       const c = state.customer;
-      $("welcome-title").textContent = `${c.user_name || "ゲスト"} 様、ようこそ！`;
-      $("welcome-subtitle").textContent = autoIdentified
-        ? CONFIG.WELCOME_MSG_AUTO
-        : CONFIG.WELCOME_MSG_DEFAULT;
-      $("preview-name").textContent = c.user_name || "—";
-      const lineName = c.line_display_name || state.displayName;
-      if (lineName && lineName !== c.user_name) {
-        $("preview-line-name").textContent = lineName;
-        $("preview-line-name-row").classList.remove("hidden");
-      } else {
-        $("preview-line-name-row").classList.add("hidden");
-      }
+      $("welcome-title").textContent = `${c.user_name || state.displayName} 様、ようこそ！`;
       $("preview-company").textContent = c.company_name || "—";
       $("preview-position").textContent = formatPosition(c);
 
@@ -607,79 +505,42 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
-    function resetNameForm() {
-      state.needsEmailConfirm = false;
-      $("email-confirm-section").classList.add("hidden");
-      $("input-email-confirm").value = "";
-      $("input-email-confirm").required = false;
-    }
-
-    async function linkParticipantByName(userName, email = "") {
-      return callGasApi("checkin_link_by_name", {
-        line_user_id: state.lineUserId,
-        event_date: CONFIG.EVENT_DATE,
-        user_name: userName,
-        line_display_name: state.displayName,
-        email,
-      });
-    }
-
-    function handleLinkResult(result) {
-      if (result.needsEmailConfirm) {
-        state.needsEmailConfirm = true;
-        $("email-confirm-section").classList.remove("hidden");
-        $("input-email-confirm").required = true;
-        $("input-name").readOnly = true;
-        showToast(result.message || "メールアドレスの確認が必要です");
-        return false;
-      }
-
-      state.customer = result.customer;
-      if (result.alreadyCheckedIn) {
-        showCompleteScreen();
-      } else {
-        showWelcomeScreen();
-      }
-      return true;
-    }
-
     // =========================================================================
     // イベントハンドラ
     // =========================================================================
-    $("form-name").addEventListener("submit", async (e) => {
+    $("form-email").addEventListener("submit", async (e) => {
       e.preventDefault();
       if (state.isSubmitting) return;
 
-      const userName = $("input-name").value.trim();
-      if (!userName) return;
-
-      const email = state.needsEmailConfirm
-        ? $("input-email-confirm").value.trim()
-        : "";
-
-      if (state.needsEmailConfirm && !email) {
-        showToast("メールアドレスを入力してください");
-        return;
-      }
+      const email = $("input-email").value.trim();
+      if (!email) return;
 
       state.isSubmitting = true;
-      setLoading($("btn-name-submit"), true, "次へ進む");
+      setLoading($("btn-email-submit"), true, "次へ進む");
 
       try {
-        const result = await runStagedBusy(
-          [
-            "参加者リストを確認しています…",
-            "お名前を照合しています…",
-            "情報を登録しています…",
-          ],
-          () => linkParticipantByName(userName, email),
-        );
-        handleLinkResult(result);
+        const result = await callGasApi("checkin_link_email", {
+          line_user_id: state.lineUserId,
+          event_date: CONFIG.EVENT_DATE,
+          email,
+          display_name: state.displayName,
+        });
+
+        state.customer = result.customer;
+
+        if (result.alreadyCheckedIn) {
+          showCompleteScreen();
+        } else {
+          showWelcomeScreen();
+          if (result.pattern === "pending_name") {
+            showToast("氏名が一致する既存データがあります。スタッフが確認します。");
+          }
+        }
       } catch (err) {
-        showToast(err.message || "確認に失敗しました");
+        showToast(err.message || "連携に失敗しました");
       } finally {
         state.isSubmitting = false;
-        setLoading($("btn-name-submit"), false, "次へ進む");
+        setLoading($("btn-email-submit"), false, "次へ進む");
       }
     });
 
@@ -707,7 +568,6 @@
         const payload = {
           line_user_id: state.lineUserId,
           event_date: CONFIG.EVENT_DATE,
-          line_display_name: state.displayName,
         };
 
         if (state.editMode) {
@@ -716,14 +576,7 @@
           payload.position_name = $("edit-position-name").value.trim();
         }
 
-        const result = await runStagedBusy(
-          [
-            "受付内容を確認しています…",
-            "来場ステータスを更新しています…",
-            "受付を完了しています…",
-          ],
-          () => callGasApi("checkin_complete", payload),
-        );
+        const result = await callGasApi("checkin_complete", payload);
         state.customer = result.customer;
         showCompleteScreen();
       } catch (err) {

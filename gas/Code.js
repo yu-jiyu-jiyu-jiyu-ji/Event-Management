@@ -20,6 +20,18 @@
 
 const SHEET_MASTER = "master_customers";
 const SHEET_EVENTS = "event_histories";
+const SHEET_RECEIPT_TEMPLATE = "receipt_template";
+const SHEET_EVENT_SETTINGS = "event_settings";
+
+/**
+ * 領収書ひな型（receipt_template）の入力セル（A1形式）。
+ * スプレッドシートのレイアウトを変えた場合はここだけ調整してください。
+ */
+const RECEIPT_TEMPLATE_CELLS = {
+  eventDate: "U7",
+  addressee: "E8",
+  amount: "E11",
+};
 
 /** @enum {string} */
 const CustomerStatus = {
@@ -139,6 +151,15 @@ function doPost(e) {
       case "checkin_complete":
         result = handleCheckinComplete_(payload);
         break;
+      case "receipt_list":
+        result = handleReceiptList_(payload);
+        break;
+      case "receipt_lookup":
+        result = handleReceiptLookup_(payload);
+        break;
+      case "receipt_generate":
+        result = handleReceiptGenerate_(payload);
+        break;
       case "health":
         result = { ok: true, message: "うおの会 GAS API is running." };
         break;
@@ -196,6 +217,17 @@ function doGet(e) {
       case "checkin_complete":
         result = handleCheckinComplete_(payload);
         break;
+      case "receipt_list":
+        result = handleReceiptList_(payload);
+        break;
+      case "receipt_lookup":
+        result = handleReceiptLookup_(payload);
+        break;
+      case "receipt_generate":
+        result = handleReceiptGenerate_(payload);
+        break;
+      case "receipt_download":
+        return handleReceiptDownloadResponse_(payload);
       case "health":
         result = { ok: true, message: "うおの会 GAS API is running." };
         break;
@@ -651,6 +683,272 @@ function handleCheckinComplete_(payload) {
  * @param {string} lineUserId
  * @returns {Object|null}
  */
+// =============================================================================
+// 領収書 LIFF API
+// =============================================================================
+
+function todayYmdJst_() {
+  return Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyyMMdd");
+}
+
+function formatEventDateJapanese_(yyyymmdd) {
+  const s = String(yyyymmdd || "").trim();
+  if (s.length !== 8) {
+    return s;
+  }
+  const y = s.slice(0, 4);
+  const m = Number(s.slice(4, 6));
+  const d = Number(s.slice(6, 8));
+  return y + "\u5e74" + m + "\u6708" + d + "\u65e5";
+}
+
+function formatReceiptAmount_(yen) {
+  const n = Number(yen);
+  if (isNaN(n) || n < 0) {
+    throw new Error("\u53c2\u52a0\u8cbb\u304c\u6b63\u3057\u304f\u8a2d\u5b9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002");
+  }
+  return "\u00a5" + n.toLocaleString("ja-JP");
+}
+
+function formatReceiptAddressee_(receiptName) {
+  const n = String(receiptName || "").trim();
+  if (n) {
+    return n + "\u3000\u69d8";
+  }
+  return "\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u69d8";
+}
+
+function getEventSettingsSheet_() {
+  const sheet = getSpreadsheet_().getSheetByName(SHEET_EVENT_SETTINGS);
+  if (!sheet) {
+    throw new Error("event_settings \u30b7\u30fc\u30c8\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002");
+  }
+  return sheet;
+}
+
+function findEventSettings_(eventDate) {
+  const sheet = getEventSettingsSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return null;
+  }
+  const target = String(eventDate).trim();
+  for (let row = 2; row <= lastRow; row++) {
+    const record = rowToObject_(sheet, row);
+    const rowDate = String(record["\u30a4\u30d9\u30f3\u30c8\u65e5"] || record.event_date || "").trim();
+    if (rowDate === target) {
+      return {
+        event_date: rowDate,
+        participation_fee: Number(record["\u53c2\u52a0\u8cbb"] || record.participation_fee || 0),
+        receipt_available_from: String(
+          record["\u9818\u53ce\u66f8\u767a\u884c\u958b\u59cb\u65e5"] || record.receipt_available_from || "",
+        ).trim(),
+        event_name: String(record["\u30a4\u30d9\u30f3\u30c8\u540d"] || record.event_name || "").trim(),
+      };
+    }
+  }
+  return null;
+}
+
+function getReceiptAvailableFrom_(settings) {
+  const from = String(settings.receipt_available_from || "").trim();
+  if (from && from.length === 8) {
+    return from;
+  }
+  const d = String(settings.event_date || "").trim();
+  if (d.length !== 8) {
+    return "";
+  }
+  const dt = new Date(Number(d.slice(0, 4)), Number(d.slice(4, 6)) - 1, Number(d.slice(6, 8)));
+  dt.setDate(dt.getDate() + 1);
+  return Utilities.formatDate(dt, "Asia/Tokyo", "yyyyMMdd");
+}
+
+function isReceiptRequiredRow_(row) {
+  return normalizeReceiptRequired_(row.receipt_required) === "\u8981";
+}
+
+function isAttendanceCheckedIn_(row) {
+  return String(row.attendance_status || "").trim() === "\u6e08";
+}
+
+function isReceiptIssuanceOpen_(settings) {
+  const from = getReceiptAvailableFrom_(settings);
+  if (!from) {
+    return false;
+  }
+  return todayYmdJst_() >= from;
+}
+
+function findEventHistoryForReceipt_(eventSheet, eventDate, lineUserId) {
+  const rows = loadEventRowsForDate_(eventSheet, eventDate);
+  return (
+    rows.find((row) => String(row.line_user_id || "").trim() === lineUserId) || null
+  );
+}
+
+function buildReceiptEligibility_(eventRow, settings) {
+  if (!eventRow) {
+    return { eligible: false, reason: "\u53c2\u52a0\u5c65\u6b74\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002" };
+  }
+  if (!isReceiptRequiredRow_(eventRow)) {
+    return { eligible: false, reason: "\u9818\u53ce\u66f8\u306e\u7533\u8acb\u304c\u3042\u308a\u307e\u305b\u3093\u3002" };
+  }
+  if (!isAttendanceCheckedIn_(eventRow)) {
+    return { eligible: false, reason: "\u53d7\u4ed8\u304c\u672a\u5b8c\u4e86\u3067\u3059\u3002" };
+  }
+  if (!settings) {
+    return { eligible: false, reason: "event_settings \u306b\u8a2d\u5b9a\u304c\u3042\u308a\u307e\u305b\u3093\u3002" };
+  }
+  if (!isReceiptIssuanceOpen_(settings)) {
+    const from = getReceiptAvailableFrom_(settings);
+    return {
+      eligible: false,
+      reason: "\u9818\u53ce\u66f8\u306f " + formatEventDateJapanese_(from) + " \u4ee5\u964d\u306b\u767a\u884c\u3067\u304d\u307e\u3059\u3002",
+      available_from: from,
+    };
+  }
+  return {
+    eligible: true,
+    event_date: settings.event_date,
+    event_name: settings.event_name || "\u3046\u304a\u306e\u4f1a",
+    amount_display: formatReceiptAmount_(settings.participation_fee),
+    addressee_preview: formatReceiptAddressee_(eventRow.receipt_name),
+    receipt_dl_count: Number(eventRow.receipt_dl_count || 0),
+    available_from: getReceiptAvailableFrom_(settings),
+  };
+}
+
+function handleReceiptList_(payload) {
+  const lineUserId = requireString_(payload.line_user_id, "line_user_id");
+  const eventSheet = getSheet_(SHEET_EVENTS);
+  const lastRow = eventSheet.getLastRow();
+  const eligible = [];
+
+  if (lastRow >= 2) {
+    for (let row = 2; row <= lastRow; row++) {
+      const eventRow = rowToObject_(eventSheet, row);
+      if (String(eventRow.line_user_id || "").trim() !== lineUserId) {
+        continue;
+      }
+      const settings = findEventSettings_(eventRow.event_date);
+      const info = buildReceiptEligibility_(eventRow, settings);
+      if (info.eligible) {
+        eligible.push(info);
+      }
+    }
+  }
+
+  eligible.sort((a, b) => String(b.event_date).localeCompare(String(a.event_date)));
+  return { ok: true, eligible: eligible, today: todayYmdJst_() };
+}
+
+function handleReceiptLookup_(payload) {
+  const lineUserId = requireString_(payload.line_user_id, "line_user_id");
+  const eventDate = requireString_(payload.event_date, "event_date");
+  const eventSheet = getSheet_(SHEET_EVENTS);
+  const eventRow = findEventHistoryForReceipt_(eventSheet, eventDate, lineUserId);
+  const settings = findEventSettings_(eventDate);
+  const info = buildReceiptEligibility_(eventRow, settings);
+  return { ok: true, eligible: info.eligible, receipt: info };
+}
+
+function exportSheetAsPdf_(spreadsheetId, sheetGid) {
+  const url =
+    "https://docs.google.com/spreadsheets/d/" +
+    spreadsheetId +
+    "/export?format=pdf&size=A4&portrait=true&fitw=true" +
+    "&sheetnames=false&printtitle=false&pagenumbers=false" +
+    "&gridlines=false&fzr=false&gid=" +
+    sheetGid;
+  const response = UrlFetchApp.fetch(url, {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  });
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error("PDF\u51fa\u529b\u306b\u5931\u6557\u3057\u307e\u3057\u305f (HTTP " + code + ")");
+  }
+  return response.getBlob().setName("receipt.pdf");
+}
+
+function buildReceiptPdfBase64_(settings, eventRow) {
+  const ss = getSpreadsheet_();
+  const template = ss.getSheetByName(SHEET_RECEIPT_TEMPLATE);
+  if (!template) {
+    throw new Error("receipt_template \u30b7\u30fc\u30c8\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002");
+  }
+
+  const workName = "_receipt_work_" + Date.now();
+  const work = template.copyTo(ss).setName(workName);
+  try {
+    work.getRange(RECEIPT_TEMPLATE_CELLS.eventDate).setValue(
+      formatEventDateJapanese_(settings.event_date),
+    );
+    work.getRange(RECEIPT_TEMPLATE_CELLS.addressee).setValue(
+      formatReceiptAddressee_(eventRow.receipt_name),
+    );
+    work.getRange(RECEIPT_TEMPLATE_CELLS.amount).setValue(
+      formatReceiptAmount_(settings.participation_fee),
+    );
+    SpreadsheetApp.flush();
+    const blob = exportSheetAsPdf_(ss.getId(), work.getSheetId());
+    return Utilities.base64Encode(blob.getBytes());
+  } finally {
+    ss.deleteSheet(work);
+  }
+}
+
+function incrementReceiptDlCount_(eventSheet, rowIndex) {
+  const row = rowToObject_(eventSheet, rowIndex);
+  const current = Number(row.receipt_dl_count || 0);
+  updateEventFields_(eventSheet, rowIndex, { receipt_dl_count: current + 1 });
+}
+
+function createReceiptPdfPayload_(payload) {
+  const lineUserId = requireString_(payload.line_user_id, "line_user_id");
+  const eventDate = requireString_(payload.event_date, "event_date");
+  const eventSheet = getSheet_(SHEET_EVENTS);
+  const eventRow = findEventHistoryForReceipt_(eventSheet, eventDate, lineUserId);
+  const settings = findEventSettings_(eventDate);
+  const info = buildReceiptEligibility_(eventRow, settings);
+  if (!info.eligible) {
+    throw new Error(info.reason || "\u9818\u53ce\u66f8\u3092\u767a\u884c\u3067\u304d\u307e\u305b\u3093\u3002");
+  }
+
+  const pdfBase64 = buildReceiptPdfBase64_(settings, eventRow);
+  incrementReceiptDlCount_(eventSheet, eventRow._rowIndex);
+
+  return {
+    filename: "\u9818\u53ce\u66f8_" + eventDate + ".pdf",
+    pdf_base64: pdfBase64,
+    receipt: info,
+  };
+}
+
+function handleReceiptGenerate_(payload) {
+  const created = createReceiptPdfPayload_(payload);
+  return {
+    ok: true,
+    filename: created.filename,
+    mime_type: "application/pdf",
+    pdf_base64: created.pdf_base64,
+    receipt: created.receipt,
+  };
+}
+
+/**
+ * LINE 内ブラウザ向け: PDF を直接返す（外部ブラウザで開く用）
+ * @param {Object} payload
+ * @returns {GoogleAppsScript.Content.BlobOutput}
+ */
+function handleReceiptDownloadResponse_(payload) {
+  const created = createReceiptPdfPayload_(payload);
+  const bytes = Utilities.base64Decode(created.pdf_base64);
+  const blob = Utilities.newBlob(bytes, "application/pdf", created.filename);
+  return ContentService.createBlobOutput(blob);
+}
+
 function findCustomerByLineId_(sheet, lineUserId) {
   const col = getColumnIndexForKey_(sheet, "line_user_id");
   if (col === undefined) {
@@ -737,13 +1035,96 @@ function loadMasterIndex_(masterSheet) {
   return { byLineId, byEmail };
 }
 
+/** 当日参加者リストの CacheService TTL（秒） */
+const EVENT_ROWS_CACHE_TTL_SEC = 300;
+
 /**
- * 指定日の event_histories を一括読み込み
+ * @param {string} eventDate
+ * @returns {string}
+ */
+function eventRowsCacheKey_(eventDate) {
+  return "event_rows_v1_" + String(eventDate);
+}
+
+/**
+ * @param {Object} row
+ * @returns {Object}
+ */
+function serializeEventRowForCache_(row) {
+  const copy = Object.assign({}, row);
+  if (copy.timestamp instanceof Date) {
+    copy.timestamp = copy.timestamp.toISOString();
+  }
+  return copy;
+}
+
+/**
+ * @param {Object} row
+ * @returns {Object}
+ */
+function deserializeEventRowFromCache_(row) {
+  const copy = Object.assign({}, row);
+  if (copy.timestamp && typeof copy.timestamp === "string") {
+    copy.timestamp = new Date(copy.timestamp);
+  }
+  return copy;
+}
+
+/**
+ * @param {string} eventDate
+ */
+function invalidateEventRowsCache_(eventDate) {
+  const key = String(eventDate || "").trim();
+  if (!key) {
+    return;
+  }
+  try {
+    CacheService.getScriptCache().remove(eventRowsCacheKey_(key));
+  } catch (ignore) {}
+}
+
+/**
+ * 指定日の event_histories（CacheService 付き）
  * @param {GoogleAppsScript.Spreadsheet.Sheet} eventSheet
  * @param {string} eventDate
  * @returns {Object[]}
  */
 function loadEventRowsForDate_(eventSheet, eventDate) {
+  const targetDate = String(eventDate || "").trim();
+  if (!targetDate) {
+    return [];
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = eventRowsCacheKey_(targetDate);
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached).map(deserializeEventRowFromCache_);
+    } catch (parseError) {
+      console.warn("event rows cache parse failed:", parseError);
+    }
+  }
+
+  const rows = loadEventRowsForDateFromSheet_(eventSheet, targetDate);
+  try {
+    const payload = JSON.stringify(rows.map(serializeEventRowForCache_));
+    if (payload.length < 90000) {
+      cache.put(cacheKey, payload, EVENT_ROWS_CACHE_TTL_SEC);
+    }
+  } catch (cacheError) {
+    console.warn("event rows cache put failed:", cacheError);
+  }
+  return rows;
+}
+
+/**
+ * 指定日の event_histories をシートから一括読み込み（キャッシュなし）
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} eventSheet
+ * @param {string} eventDate
+ * @returns {Object[]}
+ */
+function loadEventRowsForDateFromSheet_(eventSheet, eventDate) {
   const headerMap = getHeaderMap_(eventSheet);
   const lastRow = eventSheet.getLastRow();
   const lastCol = eventSheet.getLastColumn();
@@ -751,11 +1132,7 @@ function loadEventRowsForDate_(eventSheet, eventDate) {
     return [];
   }
 
-  const numRows = lastRow - 1;
-  if (numRows < 1) {
-    return [];
-  }
-  const values = eventSheet.getRange(2, 1, numRows, lastCol).getValues();
+  const values = eventSheet.getRange(2, 1, lastRow, lastCol).getValues();
   const rows = [];
   for (let i = 0; i < values.length; i++) {
     const obj = rowValuesToObject_(headerMap, values[i], i + 2);
@@ -801,12 +1178,24 @@ function updateMasterFields_(sheet, rowIndex, fields) {
  * @param {Object} fields
  */
 function updateEventFields_(sheet, rowIndex, fields) {
+  let eventDateToInvalidate = "";
+  if (sheet.getName() === SHEET_EVENTS) {
+    const row = rowToObject_(sheet, rowIndex);
+    eventDateToInvalidate = String(
+      fields.event_date || row.event_date || "",
+    ).trim();
+  }
+
   Object.keys(fields).forEach((key) => {
     const col = getColumnIndexForKey_(sheet, key);
     if (col !== undefined) {
       sheet.getRange(rowIndex, col + 1).setValue(fields[key]);
     }
   });
+
+  if (eventDateToInvalidate) {
+    invalidateEventRowsCache_(eventDateToInvalidate);
+  }
 }
 
 /**
@@ -1087,6 +1476,88 @@ function toHalfWidth_(str) {
     .replace(/\u3000/g, " ");
 }
 
+/**
+ * 領収書の要否を「要」/「不要」に正規化
+ * @param {*} value
+ * @returns {string}
+ */
+function normalizeReceiptRequired_(value) {
+  const v = toHalfWidth_(String(value || "")).trim().toLowerCase();
+  if (!v) {
+    return "不要";
+  }
+  if (
+    v === "要" ||
+    v === "必要" ||
+    v === "はい" ||
+    v === "yes" ||
+    v === "y" ||
+    v.indexOf("必要") >= 0 ||
+    v.indexOf("ほしい") >= 0
+  ) {
+    return "要";
+  }
+  return "不要";
+}
+
+/**
+ * イベント日を YYYYMMDD 形式に正規化
+ * 例: 「【受付中】7/7(火) 19:00~ うおの会」→ 20260707
+ * @param {*} value
+ * @returns {string}
+ */
+function normalizeEventDate_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}${m}${d}`;
+  }
+
+  const str = toHalfWidth_(String(value || "")).trim();
+  if (!str) {
+    throw new Error(
+      "行の参加イベントが空です。フォームで開催日を含む選択肢を選んでください。",
+    );
+  }
+
+  const digitsOnly = str.replace(/[^\d]/g, "");
+  if (digitsOnly.length === 8) {
+    return digitsOnly;
+  }
+
+  const ymdMatch = str.match(/(\d{4})[年\/\-.](\d{1,2})[月\/\-.](\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = String(ymdMatch[2]).padStart(2, "0");
+    const d = String(ymdMatch[3]).padStart(2, "0");
+    return `${y}${m}${d}`;
+  }
+
+  const mdMatch = str.match(/(\d{1,2})\/(\d{1,2})/);
+  if (mdMatch) {
+    const props = PropertiesService.getScriptProperties();
+    const year =
+      props.getProperty("DEFAULT_EVENT_YEAR") ||
+      String(new Date().getFullYear());
+    const m = String(mdMatch[1]).padStart(2, "0");
+    const d = String(mdMatch[2]).padStart(2, "0");
+    return `${year}${m}${d}`;
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, "0");
+    const d = String(parsed.getDate()).padStart(2, "0");
+    return `${y}${m}${d}`;
+  }
+
+  throw new Error(
+    "参加イベントからイベント日を読み取れません（例: 7/7 または 20260707）: " + str,
+  );
+}
+
 // =============================================================================
 // スプレッドシート操作
 // =============================================================================
@@ -1351,6 +1822,9 @@ function appendEventHistory_(sheet, data) {
   };
 
   const newRowIndex = appendRowBySchema_(sheet, EVENT_SCHEMA, values);
+  if (data.event_date) {
+    invalidateEventRowsCache_(String(data.event_date));
+  }
   return rowToObject_(sheet, newRowIndex);
 }
 
@@ -1831,10 +2305,7 @@ function readFormRow_(sheet, rowIndex) {
     .getRange(1, 1, 1, lastCol)
     .getValues()[0]
     .map((h) => String(h || "").trim());
-  const cells = sheet
-    .getRange(rowIndex, 1, 1, lastCol)
-    .getValues()[0]
-    .map((c) => (c instanceof Date ? c : String(c || "").trim()));
+  const cells = sheet.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
 
   let userName = "";
   let nameReading = "";
@@ -1845,25 +2316,30 @@ function readFormRow_(sheet, rowIndex) {
 
   for (let i = 0; i < headers.length; i++) {
     const header = headers[i];
-    const value = String(cells[i] || "").trim();
-    if (!header || !value) {
+    const raw = cells[i];
+    const value =
+      raw instanceof Date
+        ? raw
+        : String(raw === undefined || raw === null ? "" : raw).trim();
+    if (!header || value === "" || value === null || value === undefined) {
       continue;
     }
 
     if (header === "氏名" || (header.indexOf("氏名") >= 0 && header.indexOf("読み") < 0)) {
-      userName = value;
+      userName = String(value).trim();
     } else if (header === "読み方" || header.indexOf("読み") >= 0) {
-      nameReading = value;
+      nameReading = String(value).trim();
     } else if (header.indexOf("参加イベント") >= 0 || header.indexOf("参加") >= 0) {
       eventRaw = value;
     } else if (header.indexOf("領収書の有無") >= 0 || header === "領収書") {
-      receiptRequired = value;
+      receiptRequired = String(value).trim();
     } else if (header.indexOf("宛名") >= 0) {
-      receiptName = value;
+      receiptName = String(value).trim();
     }
 
-    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      emails.push(value);
+    const valueForEmail = String(value).trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valueForEmail)) {
+      emails.push(valueForEmail);
     }
   }
 
@@ -1909,6 +2385,9 @@ function writeEventRow_(sheet, data) {
     領収書DL数: 0,
   };
   writeCellsByLabels_(sheet, rowNum, labels);
+  if (data.event_date) {
+    invalidateEventRowsCache_(String(data.event_date));
+  }
   return rowToObject_(sheet, rowNum);
 }
 
@@ -1953,6 +2432,9 @@ function fillEmptyEventCells_(sheet, rowNum, data) {
     labels["領収書宛名"] = data.receipt_name;
   }
   writeCellsByLabels_(sheet, rowNum, labels);
+  if (Object.keys(labels).length > 0 && row.event_date) {
+    invalidateEventRowsCache_(String(row.event_date));
+  }
 }
 
 function findEventByEmailAndDate_(sheet, email, eventDate) {
@@ -2129,4 +2611,26 @@ function testLineNotification() {
     "【うおの会】LINE 通知テスト\n\nこのメッセージが届けば設定は OK です。",
   );
   Logger.log(JSON.stringify(result, null, 2));
+}
+
+/**
+ * フォーム転記用の日付・領収書正規化テスト（GAS エディタから手動実行）
+ */
+function testFormFieldNormalization() {
+  const eventSamples = [
+    "【受付中】7/7(火) 19:00~ うおの会",
+    "20260707",
+    "2026/7/7",
+    new Date(2026, 6, 7),
+  ];
+  eventSamples.forEach((sample) => {
+    Logger.log(
+      JSON.stringify(sample) + " => " + normalizeEventDate_(sample),
+    );
+  });
+  ["必要", "要", "不要", "はい", ""].forEach((sample) => {
+    Logger.log(
+      JSON.stringify(sample) + " => " + normalizeReceiptRequired_(sample),
+    );
+  });
 }

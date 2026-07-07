@@ -67,16 +67,18 @@
           <div class="flex justify-between gap-4"><dt class="text-slate-500">宛名</dt><dd id="detail-addressee" class="font-medium text-right"></dd></div>
           <div class="flex justify-between gap-4"><dt class="text-slate-500">金額</dt><dd id="detail-amount" class="font-bold text-right"></dd></div>
         </dl>
-        <button id="btn-download" type="button" class="w-full py-4 rounded-2xl bg-sky-600 text-white font-bold text-sm">領収書PDFをダウンロード</button>
-        <p class="text-[11px] text-slate-400 mt-3 text-center">但し書き：交流会参加費として</p>
+        <button id="btn-download" type="button" class="w-full py-4 rounded-2xl bg-sky-600 text-white font-bold text-sm">ブラウザで領収書を開く</button>
+        <p class="text-[11px] text-slate-400 mt-3 text-center">LINE内では保存できないため、Safari/Chromeで開いて保存してください。</p>
+        <p class="text-[11px] text-slate-400 mt-1 text-center">但し書き：交流会参加費として</p>
       </div>
     </section>
 
     <section id="screen-done" class="screen">
       <div class="glass rounded-3xl p-8 mt-8 text-center">
         <p class="text-4xl mb-3">✅</p>
-        <h2 class="text-lg font-bold mb-2">ダウンロード完了</h2>
-        <p class="text-sm text-slate-500">領収書を保存しました。</p>
+        <h2 class="text-lg font-bold mb-2">ブラウザで開きました</h2>
+        <p class="text-sm text-slate-500 leading-relaxed">表示されたPDFを、共有ボタンまたは「ファイルに保存」で保存してください。</p>
+        <button id="btn-open-again" type="button" class="mt-6 w-full py-3 rounded-2xl border border-slate-200 text-sm font-semibold text-slate-700">もう一度開く</button>
       </div>
     </section>
   </main>
@@ -168,19 +170,25 @@
       });
     }
 
-    function downloadBase64Pdf(base64, filename) {
-      const bin = atob(base64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const blob = new Blob([bytes], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename || "receipt.pdf";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+    function buildReceiptDownloadUrl(lineUserId, eventDate) {
+      const payload = JSON.stringify({
+        line_user_id: lineUserId,
+        event_date: eventDate,
+      });
+      return (
+        CONFIG.GAS_API_URL +
+        "?action=receipt_download&payload=" +
+        encodeURIComponent(payload)
+      );
+    }
+
+    async function openReceiptPdf(lineUserId, eventDate) {
+      const url = buildReceiptDownloadUrl(lineUserId, eventDate);
+      if (typeof liff !== "undefined" && liff.isInClient && liff.isInClient()) {
+        await liff.openWindow({ url: url, external: true });
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
     }
 
     async function bootstrap() {
@@ -228,17 +236,24 @@
     $("btn-download").addEventListener("click", async () => {
       if (!state.selected || !state.lineUserId) return;
       try {
-        const result = await runStagedBusy(
-          ["発行内容を確認しています…", "領収書PDFを作成しています…", "ダウンロードを準備しています…"],
-          () => callGasApi("receipt_generate", {
-            line_user_id: state.lineUserId,
-            event_date: state.selected.event_date,
-          }),
+        await runStagedBusy(
+          ["発行内容を確認しています…", "領収書PDFを作成しています…", "ブラウザを開いています…"],
+          async () => {
+            await openReceiptPdf(state.lineUserId, state.selected.event_date);
+          },
         );
-        downloadBase64Pdf(result.pdf_base64, result.filename);
         showScreen("done");
       } catch (e) {
-        alert(e.message || "ダウンロードに失敗しました");
+        alert(e.message || "領収書を開けませんでした");
+      }
+    });
+
+    $("btn-open-again").addEventListener("click", async () => {
+      if (!state.selected || !state.lineUserId) return;
+      try {
+        await openReceiptPdf(state.lineUserId, state.selected.event_date);
+      } catch (e) {
+        alert(e.message || "領収書を開けませんでした");
       }
     });
 
