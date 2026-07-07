@@ -171,15 +171,11 @@
     }
 
     function buildReceiptDownloadUrl(lineUserId, eventDate) {
-      const payload = JSON.stringify({
+      const qs = new URLSearchParams({
         line_user_id: lineUserId,
         event_date: eventDate,
       });
-      return (
-        CONFIG.GAS_API_URL +
-        "?action=receipt_download&payload=" +
-        encodeURIComponent(payload)
-      );
+      return location.origin + "/receipt-download?" + qs.toString();
     }
 
     async function openReceiptPdf(lineUserId, eventDate) {

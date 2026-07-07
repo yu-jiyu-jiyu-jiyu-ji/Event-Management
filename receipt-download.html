@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>うおの会 領収書ダウンロード</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: linear-gradient(160deg, #0f172a 0%, #0c4a6e 45%, #082f49 100%); min-height: 100vh; }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="text-slate-800 antialiased">
+  <main class="max-w-md mx-auto px-4 py-16">
+    <div class="bg-white/95 rounded-3xl p-8 text-center shadow-xl">
+      <div id="state-loading">
+        <div class="w-10 h-10 border-4 border-sky-200 border-t-sky-600 rounded-full spin mx-auto mb-4"></div>
+        <p id="status-message" class="text-sm text-slate-600">領収書PDFを作成しています…</p>
+      </div>
+      <div id="state-done" class="hidden">
+        <p class="text-4xl mb-3">✅</p>
+        <h1 class="text-lg font-bold mb-2">ダウンロードを開始しました</h1>
+        <p class="text-sm text-slate-500 leading-relaxed">保存されない場合は、ブラウザのダウンロード一覧をご確認ください。</p>
+      </div>
+      <div id="state-error" class="hidden">
+        <p class="text-4xl mb-3">⚠️</p>
+        <p id="error-message" class="text-sm text-slate-600 mb-6"></p>
+        <button id="btn-retry" type="button" class="w-full py-3 rounded-2xl bg-sky-600 text-white text-sm font-semibold">もう一度</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const CONFIG = {
+      GAS_API_URL: "https://script.google.com/macros/s/AKfycbw0STTLLXzPWjXiRxu38ex5U9VGWTkhUeXZRCio8ox9llwGXoyUI2Ks6699jH3Vdr0m/exec",
+    };
+
+    const params = new URLSearchParams(location.search);
+    const lineUserId = params.get("line_user_id") || "";
+    const eventDate = params.get("event_date") || "";
+
+    function show(id) {
+      ["state-loading", "state-done", "state-error"].forEach((name) => {
+        document.getElementById(name).classList.toggle("hidden", name !== id);
+      });
+    }
+
+    function downloadBase64Pdf(base64, filename) {
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || "receipt.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+
+    async function callGasApi(action, data) {
+      const payload = JSON.stringify({ action, ...data });
+      const url =
+        CONFIG.GAS_API_URL +
+        "?action=" +
+        encodeURIComponent(action) +
+        "&payload=" +
+        encodeURIComponent(payload);
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "API error");
+      return json;
+    }
+
+    async function run() {
+      if (!lineUserId || !eventDate) {
+        show("state-error");
+        document.getElementById("error-message").textContent =
+          "パラメータが不足しています。LINEアプリから再度お試しください。";
+        return;
+      }
+
+      show("state-loading");
+      try {
+        document.getElementById("status-message").textContent = "領収書PDFを作成しています…";
+        const result = await callGasApi("receipt_generate", {
+          line_user_id: lineUserId,
+          event_date: eventDate,
+        });
+        document.getElementById("status-message").textContent = "ダウンロードを開始します…";
+        downloadBase64Pdf(result.pdf_base64, result.filename);
+        show("state-done");
+      } catch (e) {
+        show("state-error");
+        document.getElementById("error-message").textContent = e.message || String(e);
+      }
+    }
+
+    document.getElementById("btn-retry").addEventListener("click", run);
+    run();
+  </script>
+</body>
+</html>

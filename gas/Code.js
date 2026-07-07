@@ -226,8 +226,6 @@ function doGet(e) {
       case "receipt_generate":
         result = handleReceiptGenerate_(payload);
         break;
-      case "receipt_download":
-        return handleReceiptDownloadResponse_(payload);
       case "health":
         result = { ok: true, message: "うおの会 GAS API is running." };
         break;
@@ -935,18 +933,6 @@ function handleReceiptGenerate_(payload) {
     pdf_base64: created.pdf_base64,
     receipt: created.receipt,
   };
-}
-
-/**
- * LINE 内ブラウザ向け: PDF を直接返す（外部ブラウザで開く用）
- * @param {Object} payload
- * @returns {GoogleAppsScript.Content.BlobOutput}
- */
-function handleReceiptDownloadResponse_(payload) {
-  const created = createReceiptPdfPayload_(payload);
-  const bytes = Utilities.base64Decode(created.pdf_base64);
-  const blob = Utilities.newBlob(bytes, "application/pdf", created.filename);
-  return ContentService.createBlobOutput(blob);
 }
 
 function findCustomerByLineId_(sheet, lineUserId) {
