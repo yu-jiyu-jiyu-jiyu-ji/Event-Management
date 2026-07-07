@@ -175,7 +175,7 @@
         line_user_id: lineUserId,
         event_date: eventDate,
       });
-      return location.origin + "/receipt-download?" + qs.toString();
+      return location.origin + "/receipt-download?" + qs.toString() + "#" + qs.toString();
     }
 
     async function openReceiptPdf(lineUserId, eventDate) {

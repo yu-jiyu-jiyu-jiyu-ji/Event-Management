@@ -36,7 +36,22 @@
       GAS_API_URL: "https://script.google.com/macros/s/AKfycbw0STTLLXzPWjXiRxu38ex5U9VGWTkhUeXZRCio8ox9llwGXoyUI2Ks6699jH3Vdr0m/exec",
     };
 
-    const params = new URLSearchParams(location.search);
+    function getMergedParams() {
+      const searchParams = new URLSearchParams(location.search);
+      const hash = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+      const hashParams = new URLSearchParams(hash);
+      const merged = new URLSearchParams();
+
+      searchParams.forEach((value, key) => merged.set(key, value));
+      hashParams.forEach((value, key) => {
+        if (!merged.get(key)) {
+          merged.set(key, value);
+        }
+      });
+      return merged;
+    }
+
+    const params = getMergedParams();
     const lineUserId = params.get("line_user_id") || "";
     const eventDate = params.get("event_date") || "";
 
