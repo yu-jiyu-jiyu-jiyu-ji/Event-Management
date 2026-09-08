@@ -61,6 +61,10 @@
 
     <section id="screen-detail" class="screen">
       <div class="glass rounded-3xl p-6 mt-4">
+        <button id="btn-back-to-list" type="button"
+          class="hidden mb-4 text-sm font-semibold text-sky-700 hover:text-sky-900">
+          ← 一覧に戻る
+        </button>
         <h2 id="detail-title" class="text-lg font-bold mb-1"></h2>
         <p id="detail-date" class="text-xs text-slate-500 mb-4"></p>
         <dl class="space-y-3 text-sm mb-6">
@@ -78,6 +82,7 @@
         <h2 class="text-lg font-bold mb-2">ブラウザで開きました</h2>
         <p class="text-sm text-slate-500 leading-relaxed">表示されたPDFを、共有ボタンまたは「ファイルに保存」で保存してください。</p>
         <button id="btn-open-again" type="button" class="mt-6 w-full py-3 rounded-2xl border border-slate-200 text-sm font-semibold text-slate-700">もう一度開く</button>
+        <button id="btn-back-to-list-done" type="button" class="hidden mt-3 w-full py-3 rounded-2xl text-sm font-semibold text-sky-700">一覧に戻る</button>
       </div>
     </section>
   </main>
@@ -148,12 +153,27 @@
       return p.userId;
     }
 
+    function hasMultipleItems() {
+      return Array.isArray(state.items) && state.items.length > 1;
+    }
+
+    function showListScreen() {
+      state.selected = null;
+      renderList(state.items);
+      showScreen("list");
+    }
+
     function selectItem(item) {
       state.selected = item;
       $("detail-title").textContent = item.event_name || "うおの会";
       $("detail-date").textContent = "開催日: " + formatEventDate(item.event_date);
       $("detail-addressee").textContent = item.addressee_preview || "　　　　様";
       $("detail-amount").textContent = item.amount_display || "";
+      if (hasMultipleItems()) {
+        $("btn-back-to-list").classList.remove("hidden");
+      } else {
+        $("btn-back-to-list").classList.add("hidden");
+      }
       showScreen("detail");
     }
 
@@ -242,6 +262,11 @@
             await openReceiptPdf(state.lineUserId, state.selected.event_date);
           },
         );
+        if (hasMultipleItems()) {
+          $("btn-back-to-list-done").classList.remove("hidden");
+        } else {
+          $("btn-back-to-list-done").classList.add("hidden");
+        }
         showScreen("done");
       } catch (e) {
         alert(e.message || "領収書を開けませんでした");
@@ -255,6 +280,16 @@
       } catch (e) {
         alert(e.message || "領収書を開けませんでした");
       }
+    });
+
+    $("btn-back-to-list").addEventListener("click", () => {
+      if (!hasMultipleItems()) return;
+      showListScreen();
+    });
+
+    $("btn-back-to-list-done").addEventListener("click", () => {
+      // 発行後は一覧を再取得（DL済みを除外）
+      bootstrap();
     });
 
     $("btn-retry").addEventListener("click", () => bootstrap());
