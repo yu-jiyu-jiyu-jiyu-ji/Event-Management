@@ -48,7 +48,7 @@
       <div class="glass rounded-3xl p-8 mt-8 text-center">
         <p class="text-4xl mb-3">📄</p>
         <h2 class="text-lg font-bold mb-2">発行できる領収書がありません</h2>
-        <p id="empty-message" class="text-sm text-slate-500 leading-relaxed"></p>
+        <p id="empty-message" class="text-sm text-slate-500 leading-relaxed whitespace-pre-line"></p>
       </div>
     </section>
 
@@ -212,12 +212,14 @@
 
         if (!items.length) {
           $("empty-message").textContent =
+            list.summary ||
             list.first_reason ||
             "領収書の申込があり、受付済みで、発行開始日以降のイベントがありません。";
           showScreen("empty");
           return;
         }
 
+        // 発行可能なものだけ表示（未発行が複数なら選択式）
         state.items = items;
         if (items.length === 1) {
           selectItem(items[0]);
