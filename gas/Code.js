@@ -160,6 +160,9 @@ function doPost(e) {
       case "receipt_generate":
         result = handleReceiptGenerate_(payload);
         break;
+      case "current_event":
+        result = handleCurrentEvent_(payload);
+        break;
       case "health":
         result = { ok: true, message: "うおの会 GAS API is running." };
         break;
@@ -225,6 +228,9 @@ function doGet(e) {
         break;
       case "receipt_generate":
         result = handleReceiptGenerate_(payload);
+        break;
+      case "current_event":
+        result = handleCurrentEvent_(payload);
         break;
       case "health":
         result = { ok: true, message: "うおの会 GAS API is running." };
@@ -724,28 +730,83 @@ function getEventSettingsSheet_() {
   return sheet;
 }
 
-function findEventSettings_(eventDate) {
+function parseEventSettingsRow_(record) {
+  const rowDate = String(
+    record["\u30a4\u30d9\u30f3\u30c8\u65e5"] || record.event_date || "",
+  ).trim();
+  if (!rowDate || rowDate.length !== 8) {
+    return null;
+  }
+  return {
+    event_date: rowDate,
+    participation_fee: Number(record["\u53c2\u52a0\u8cbb"] || record.participation_fee || 0),
+    receipt_available_from: String(
+      record["\u9818\u53ce\u66f8\u767a\u884c\u958b\u59cb\u65e5"] || record.receipt_available_from || "",
+    ).trim(),
+    event_name: String(record["\u30a4\u30d9\u30f3\u30c8\u540d"] || record.event_name || "").trim(),
+  };
+}
+
+function listEventSettings_() {
   const sheet = getEventSettingsSheet_();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) {
-    return null;
+    return [];
   }
-  const target = String(eventDate).trim();
+  const list = [];
   for (let row = 2; row <= lastRow; row++) {
-    const record = rowToObject_(sheet, row);
-    const rowDate = String(record["\u30a4\u30d9\u30f3\u30c8\u65e5"] || record.event_date || "").trim();
-    if (rowDate === target) {
-      return {
-        event_date: rowDate,
-        participation_fee: Number(record["\u53c2\u52a0\u8cbb"] || record.participation_fee || 0),
-        receipt_available_from: String(
-          record["\u9818\u53ce\u66f8\u767a\u884c\u958b\u59cb\u65e5"] || record.receipt_available_from || "",
-        ).trim(),
-        event_name: String(record["\u30a4\u30d9\u30f3\u30c8\u540d"] || record.event_name || "").trim(),
-      };
+    const parsed = parseEventSettingsRow_(rowToObject_(sheet, row));
+    if (parsed) {
+      list.push(parsed);
     }
   }
-  return null;
+  list.sort((a, b) => String(a.event_date).localeCompare(String(b.event_date)));
+  return list;
+}
+
+function findEventSettings_(eventDate) {
+  const target = String(eventDate).trim();
+  const list = listEventSettings_();
+  return list.find((item) => item.event_date === target) || null;
+}
+
+/**
+ * 受付用の「いまのイベント日」を event_settings から自動決定
+ * 優先順: 当日 → 直近の未来 → 直近の過去
+ */
+function resolveCurrentEvent_() {
+  const today = todayYmdJst_();
+  const list = listEventSettings_();
+  if (!list.length) {
+    throw new Error(
+      "event_settings \u306b\u30a4\u30d9\u30f3\u30c8\u304c\u767b\u9332\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002",
+    );
+  }
+
+  const todayEvent = list.find((item) => item.event_date === today);
+  if (todayEvent) {
+    return { event: todayEvent, mode: "today", today: today };
+  }
+
+  const upcoming = list.filter((item) => item.event_date > today);
+  if (upcoming.length) {
+    return { event: upcoming[0], mode: "upcoming", today: today };
+  }
+
+  return { event: list[list.length - 1], mode: "past", today: today };
+}
+
+function handleCurrentEvent_(payload) {
+  const resolved = resolveCurrentEvent_();
+  return {
+    ok: true,
+    event_date: resolved.event.event_date,
+    event_name: resolved.event.event_name || "\u3046\u304a\u306e\u4f1a",
+    participation_fee: resolved.event.participation_fee,
+    receipt_available_from: resolved.event.receipt_available_from,
+    mode: resolved.mode,
+    today: resolved.today,
+  };
 }
 
 function getReceiptAvailableFrom_(settings) {

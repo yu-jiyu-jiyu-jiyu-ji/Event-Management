@@ -405,7 +405,8 @@
       LIFF_ID: "2010484166-bN2zuFKb",
       LIFF_URL: "https://liff.line.me/2010484166-bN2zuFKb",
       GAS_API_URL: "https://script.google.com/macros/s/AKfycbw0STTLLXzPWjXiRxu38ex5U9VGWTkhUeXZRCio8ox9llwGXoyUI2Ks6699jH3Vdr0m/exec",
-      EVENT_DATE: new URLSearchParams(location.search).get("event") || "20260707",
+      // ?event=YYYYMMDD があれば優先。なければ event_settings から自動判定
+      EVENT_DATE: new URLSearchParams(location.search).get("event") || "",
       // ようこそ画面のサブタイトル（ここを編集してください）
       WELCOME_MSG_AUTO: "LINE連携済みのため、自動で確認しました",
       WELCOME_MSG_DEFAULT: "本日もお越しいただきありがとうございます",
@@ -539,14 +540,25 @@
       return profile;
     }
 
+    async function resolveEventDate() {
+      if (CONFIG.EVENT_DATE) {
+        return CONFIG.EVENT_DATE;
+      }
+      const current = await callGasApi("current_event");
+      CONFIG.EVENT_DATE = current.event_date;
+      return CONFIG.EVENT_DATE;
+    }
+
     // =========================================================================
     // 画面フロー
     // =========================================================================
     async function bootstrap() {
       showScreen("loading");
-      $("event-badge").textContent = formatEventDate(CONFIG.EVENT_DATE);
 
       try {
+        await resolveEventDate();
+        $("event-badge").textContent = formatEventDate(CONFIG.EVENT_DATE);
+
         await initLiff();
         if (!state.lineUserId) return;
 
